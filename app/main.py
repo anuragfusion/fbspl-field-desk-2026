@@ -37,10 +37,35 @@ def _seed_admin_from_env() -> None:
         audit(conn, None, "user.create", "user", uid, {"username": username, "role": "admin"})
 
 
+def _seed_event_from_env() -> None:
+    """Same rationale as _seed_admin_from_env: free-tier has no shell to run
+    app.cli create-event. If EVENT_NAME is set and no event exists yet,
+    create one and add every admin as an organiser."""
+    name = os.environ.get("EVENT_NAME")
+    if not name:
+        return
+    with db() as conn:
+        if conn.execute("SELECT 1 FROM events LIMIT 1").fetchone():
+            return
+        eid = new_id()
+        conn.execute(
+            "INSERT INTO events (id, name, venue, city, country, starts_on, ends_on, timezone)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (eid, name, os.environ.get("EVENT_VENUE", ""), os.environ.get("EVENT_CITY", ""),
+             os.environ.get("EVENT_COUNTRY", ""), os.environ.get("EVENT_STARTS", ""),
+             os.environ.get("EVENT_ENDS", ""), os.environ.get("EVENT_TIMEZONE", "UTC")))
+        for u in conn.execute("SELECT id FROM users WHERE role='admin'").fetchall():
+            conn.execute(
+                "INSERT INTO event_members (id, event_id, user_id, event_role, added_at)"
+                " VALUES (?,?,?,?,?)", (new_id(), eid, u["id"], "organiser", now_iso()))
+        audit(conn, None, "event.create", "event", eid, {"name": name})
+
+
 @app.on_event("startup")
 def _startup() -> None:
     init_db()
     _seed_admin_from_env()
+    _seed_event_from_env()
 
 
 @app.exception_handler(A.ApiError)
