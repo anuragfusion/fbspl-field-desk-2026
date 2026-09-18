@@ -1,5 +1,6 @@
 """FBSPL Field Desk — FastAPI app."""
 
+import os
 import sqlite3
 
 from fastapi import Depends, FastAPI, Request, Response
@@ -9,16 +10,37 @@ from pydantic import BaseModel, Field
 
 from . import admin, api
 from . import auth as A
-from .db import BASE_DIR, audit, get_db, init_db, now_iso
+from .db import BASE_DIR, audit, db, new_id, get_db, init_db, now_iso
 
 STATIC_DIR = BASE_DIR / "static"
 
 app = FastAPI(title="FBSPL Field Desk", docs_url="/api/docs", openapi_url="/api/openapi.json")
 
 
+def _seed_admin_from_env() -> None:
+    """First boot on a fresh (e.g. Render free-tier ephemeral) DB has no admin
+    and no shell access to run app.cli. If ADMIN_USERNAME/ADMIN_PASSWORD are
+    set, create the admin once; otherwise this is a no-op."""
+    username = os.environ.get("ADMIN_USERNAME")
+    password = os.environ.get("ADMIN_PASSWORD")
+    if not username or not password:
+        return
+    with db() as conn:
+        if conn.execute("SELECT 1 FROM users WHERE role='admin' AND disabled_at IS NULL").fetchone():
+            return
+        uid = new_id()
+        conn.execute(
+            "INSERT INTO users (id, username, full_name, role, password_hash,"
+            " must_change_password, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+            (uid, username, username, "admin", A.hash_password(password),
+             0, now_iso(), now_iso()))
+        audit(conn, None, "user.create", "user", uid, {"username": username, "role": "admin"})
+
+
 @app.on_event("startup")
 def _startup() -> None:
     init_db()
+    _seed_admin_from_env()
 
 
 @app.exception_handler(A.ApiError)
