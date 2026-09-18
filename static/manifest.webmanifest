@@ -1,0 +1,14 @@
+{
+  "name": "FBSPL Field Desk",
+  "short_name": "Field Desk",
+  "description": "Office-to-floor client briefing. Works offline.",
+  "start_url": "/app",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#F8F8FF",
+  "theme_color": "#002CCE",
+  "orientation": "portrait-primary",
+  "icons": [
+    { "src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

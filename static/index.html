@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>FBSPL Field Desk</title>
+<meta name="description" content="FBSPL internal briefing tool. Office publishes, floor team reads — online or off.">
+<link rel="manifest" href="/static/manifest.webmanifest">
+<meta name="theme-color" content="#002CCE">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="locked">
+
+<!-- sign-in gate -->
+<div class="gate" id="gate" role="dialog" aria-modal="true" aria-label="Sign in to FBSPL Field Desk">
+  <div class="gate-in">
+    <div class="gate-art">
+      <div class="brandslot"><div><div class="bm">FBSPL</div>
+        <div class="bs">Fusion Business Solutions</div></div></div>
+      <div>
+        <h2>Field Desk</h2>
+        <p class="lede">The office publishes client briefs, documents, schedule changes and live
+          updates. The team on the floor reads them here — online or off.</p>
+      </div>
+      <div class="evt">
+        <div><b>Applied Net 2026</b>Gaylord National, Washington DC</div>
+        <div><b>Sept 28 – Oct 1</b>Sign in once on wifi before you travel</div>
+      </div>
+    </div>
+    <div class="gate-form">
+      <div class="box">
+        <h3>Sign in</h3>
+        <div class="sub">Use the account the office issued you.</div>
+        <div class="gate-err" id="gateErr"></div>
+        <form id="gateForm" autocomplete="on">
+          <div class="fld"><label for="gUser">Username</label>
+            <input class="inp" id="gUser" name="username" autocomplete="username"
+                   autocapitalize="none" spellcheck="false" required></div>
+          <div class="fld"><label for="gPass">Password</label>
+            <input class="inp" id="gPass" name="password" type="password"
+                   autocomplete="current-password" required></div>
+          <label class="remember"><input type="checkbox" id="gKeep" checked>
+            Keep me signed in on this device</label>
+          <button class="btn" type="submit" id="gGo">Sign in</button>
+        </form>
+        <div class="gate-foot">
+          You must sign in once <b>while you have wifi</b>. After that the app works with the
+          network switched off. No account? Ask whoever publishes the briefing pack.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<header class="masthead" id="masthead">
+  <div class="brandslot"><div><div class="bm">FBSPL</div>
+    <div class="bs">Fusion Business Solutions</div></div></div>
+  <div class="mh-t">
+    <div class="kick"><span id="evtName">—</span> · <span id="evtVenue"></span></div>
+    <h1>Field Desk</h1>
+  </div>
+  <div class="who">
+    <div><span class="wn" id="whoName">—</span><span class="wr" id="whoRole">—</span></div>
+    <button id="signOut" type="button">Sign out</button>
+  </div>
+</header>
+
+<div class="statusbar">
+  <span class="dot" id="netDot"></span><span id="netText">—</span>
+  <span id="syncPending" class="hide"></span>
+  <span style="flex:1"></span>
+  <span class="badge mute" id="readiness">—</span>
+  <button class="btn sub tiny" id="btnPrepare">Prepare for offline</button>
+  <button class="btn sub tiny" id="btnSync">Sync now</button>
+</div>
+
+<nav class="tabs" id="tabs" role="tablist">
+  <button role="tab" aria-selected="true" data-p="brief">Brief <span class="pill" id="pBrief">0</span></button>
+  <button role="tab" aria-selected="false" data-p="clients">Clients <span class="pill" id="pClients">0</span></button>
+  <button role="tab" aria-selected="false" data-p="docs">Documents <span class="pill" id="pDocs">0</span></button>
+  <button role="tab" aria-selected="false" data-p="sched">Schedule <span class="pill" id="pSched">0</span></button>
+  <button role="tab" aria-selected="false" data-p="leads">Leads <span class="pill" id="pLeads">0</span></button>
+</nav>
+
+<main class="wrap">
+  <section class="panel on" id="p-brief" role="tabpanel">
+    <div class="sec-h"><div><h2>Live updates from the office</h2>
+      <div class="sub">Newest first. Pinned items stay at the top for the whole event.</div></div></div>
+    <div class="feed" id="feed"></div>
+  </section>
+
+  <section class="panel" id="p-clients" role="tabpanel">
+    <div class="sec-h"><div><h2>Client briefs</h2>
+      <div class="sub">What the office needs you to know, say, and not say.</div></div></div>
+    <div class="rowtools" style="margin-bottom:13px">
+      <div style="flex:1 1 220px;max-width:380px">
+        <input class="inp" id="qClients" placeholder="Search client, POC, owner, talking point…"></div>
+      <div class="chips" id="cPriority">
+        <button class="chip" aria-pressed="false" data-v="must">Must meet</button>
+        <button class="chip" aria-pressed="false" data-v="target">Target</button>
+        <button class="chip" aria-pressed="false" data-v="watch">Watch</button>
+      </div>
+    </div>
+    <div class="cards" id="clientCards"></div>
+  </section>
+
+  <section class="panel" id="p-docs" role="tabpanel">
+    <div class="sec-h"><div><h2>Document library</h2>
+      <div class="sub">Downloaded to this device in full, so they open with no network.</div></div></div>
+    <div class="note">Tap <b>Prepare for offline</b> while you still have wifi. Documents are not
+      fetched on demand — a PDF that streams is a PDF you cannot open in the exhibit hall.</div>
+    <div class="dlist" id="docList"></div>
+  </section>
+
+  <section class="panel" id="p-sched" role="tabpanel">
+    <div class="sec-h"><div><h2>Meeting schedule</h2>
+      <div class="sub">Sept 28 – Oct 1, 2026 · Gaylord National</div></div></div>
+    <div id="schedList"></div>
+  </section>
+
+  <section class="panel" id="p-leads" role="tabpanel">
+    <div class="sec-h">
+      <div><h2>Leads captured</h2>
+        <div class="sub">Saved on this device first, synced when there is signal.</div></div>
+      <div class="rowtools"><span id="leadPending" class="badge ok">all synced</span>
+        <button class="btn" id="addLead">+ Log a lead</button></div>
+    </div>
+    <div class="tscroll"><table class="tbl">
+      <thead><tr><th>Captured</th><th>Name &amp; company</th><th>Contact</th>
+        <th>Interest</th><th>Next step</th><th>Status</th></tr></thead>
+      <tbody id="leadBody"></tbody>
+    </table></div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+<div id="modalHost"></div>
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

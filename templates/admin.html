@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Field Desk — office</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  .card{background:#fff;border:1px solid var(--line);border-radius:var(--r-md);
+        padding:17px;margin-bottom:16px;box-shadow:var(--sh-sm)}
+  .card h2{font-size:16px;margin-bottom:4px}
+  .card .sub{color:var(--gray-700);font-size:13px;margin-bottom:13px}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+  @media(max-width:900px){.cols{grid-template-columns:1fr}}
+  .inline{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end}
+  .inline .fld{margin-bottom:0;flex:1 1 130px}
+  form.rowform{display:inline}
+  .flash{padding:11px 14px;border-radius:var(--r-sm);margin-bottom:15px;font-size:13.5px}
+  .flash.ok{background:#E3F5EC;border:1px solid #BFE5D3;color:#0B6B41}
+  .flash.err{background:#FDECEA;border:1px solid #F5C6C2;color:#912018}
+  .flash.warn{background:#FFF6EC;border:1px solid #FBDCB4;color:#8A4B00}
+  td.tight,th.tight{white-space:nowrap}
+</style>
+</head>
+<body style="background:var(--lav-30)">
+
+<header class="masthead">
+  <div class="brandslot"><div><div class="bm">FBSPL</div>
+    <div class="bs">Fusion Business Solutions</div></div></div>
+  <div class="mh-t">
+    <div class="kick">{% if event %}{{ event.name }} · {{ event.venue or '' }}{% else %}No event{% endif %}</div>
+    <h1>Field Desk — office</h1>
+  </div>
+  <div class="who">
+    <div><span class="wn">{{ user.full_name }}</span><span class="wr">Admin</span></div>
+    <a href="/app" style="color:#fff;font-size:12px;padding:5px 10px">Floor view</a>
+    <a href="/admin/logout" style="color:#fff;font-size:12px;padding:5px 10px">Sign out</a>
+  </div>
+</header>
+
+<main class="wrap">
+{% if msg %}<div class="flash {{ kind }}">{{ msg }}</div>{% endif %}
+
+{% if not event %}
+  <div class="empty"><b>No event yet</b>
+    Create one on the server: <code>python -m app.cli create-event --name "Applied Net 2026"
+    --starts 2026-09-28 --ends 2026-10-01</code></div>
+{% else %}
+
+<div class="card">
+  <h2>{{ event.name }}</h2>
+  <div class="sub">{{ event.venue or '—' }} · {{ event.starts_on }} to {{ event.ends_on }}
+    · sync version <b>{{ event.version }}</b> · timezone {{ event.timezone }}</div>
+  <div class="rowtools">
+    <span class="badge">{{ clients|length }} clients</span>
+    <span class="badge">{{ documents|length }} documents</span>
+    <span class="badge">{{ updates|length }} updates</span>
+    <span class="badge">{{ leads|length }} leads</span>
+    <a class="btn ghost tiny" href="/api/v1/events/{{ event.id }}/leads/export.csv">Export leads CSV</a>
+    <a class="btn sub tiny" href="/api/v1/events/{{ event.id }}/export/phase1-pack.json">
+      Download Phase 1 pack</a>
+    <a class="btn sub tiny" href="/api/v1/events/{{ event.id }}/export/phase1-pack.json?files=0">
+      Pack without documents</a>
+  </div>
+  <div class="note" style="margin-top:12px">The <b>Phase 1 pack</b> is the rollback lever: import it
+    into the single-file HTML tool and the floor team can keep working if this server is
+    unreachable. Temporary passwords for it are printed by
+    <code>python -m app.cli export-phase1</code> — they are deliberately not in the file.</div>
+</div>
+
+<div class="cols">
+  <div>
+    <div class="card">
+      <h2>Post an update to the floor</h2>
+      <div class="sub">Reaches every device on its next sync.</div>
+      <form method="post" action="/admin/updates/new">
+        <input type="hidden" name="event_id" value="{{ event.id }}">
+        <div class="fld"><label>Headline</label>
+          <input class="inp" name="title" required placeholder="Renewal pricing approved for Meridian"></div>
+        <div class="fld"><label>Detail</label><textarea class="inp" name="body"></textarea></div>
+        <div class="inline" style="margin-bottom:12px">
+          <div class="fld"><label>Priority</label><select class="inp" name="level">
+            <option value="info">Normal</option><option value="urgent">Urgent</option></select></div>
+          <div class="fld"><label>About a client</label><select class="inp" name="client_id">
+            <option value="">— none —</option>
+            {% for c in clients %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+          </select></div>
+        </div>
+        <label style="font-size:13px"><input type="checkbox" name="pinned" value="1"> Pin to top</label>
+        &nbsp;&nbsp;
+        <label style="font-size:13px"><input type="checkbox" name="is_action" value="1">
+          Needs an acknowledgement</label>
+        <div class="rowtools" style="margin-top:12px"><button class="btn" type="submit">Post update</button></div>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Import the client workbook</h2>
+      <div class="sub">Same sheet the Battlecards tool reads. Previews first — nothing is written
+        until you tick Apply.</div>
+      <form method="post" action="/admin/import" enctype="multipart/form-data">
+        <input type="hidden" name="event_id" value="{{ event.id }}">
+        <div class="fld"><label>Workbook (.xlsx)</label>
+          <input class="inp" type="file" name="file" accept=".xlsx,.xlsm,.xls" required></div>
+        <label style="font-size:13px"><input type="checkbox" name="commit" value="1">
+          <b>Apply</b> — leave unticked to preview only</label>
+        <div class="rowtools" style="margin-top:12px"><button class="btn" type="submit">Upload</button></div>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Upload a document</h2>
+      <div class="sub">PDF, PNG, JPEG, DOCX, XLSX, PPTX. Checked by content, not by filename.</div>
+      <form method="post" action="/admin/documents" enctype="multipart/form-data">
+        <input type="hidden" name="event_id" value="{{ event.id }}">
+        <div class="fld"><label>File</label><input class="inp" type="file" name="file" required></div>
+        <div class="inline">
+          <div class="fld"><label>Attach to client</label><select class="inp" name="client_id">
+            <option value="">General</option>
+            {% for c in clients %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+          </select></div>
+          <div class="fld"><label>Note</label><input class="inp" name="note"></div>
+          <button class="btn" type="submit">Upload</button>
+        </div>
+      </form>
+      <div class="note crit" style="margin-top:12px">Keep the total small. Every phone downloads
+        <b>every</b> document in full before travelling — that is what makes them open with no wifi.</div>
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <h2>Team accounts</h2>
+      <div class="sub">You create accounts and set passwords. There is no self-service reset.</div>
+      <form method="post" action="/admin/users/new">
+        <input type="hidden" name="event_id" value="{{ event.id }}">
+        <div class="inline" style="margin-bottom:10px">
+          <div class="fld"><label>Username</label><input class="inp" name="username" required></div>
+          <div class="fld"><label>Full name</label><input class="inp" name="full_name"></div>
+        </div>
+        <div class="inline">
+          <div class="fld"><label>Role</label><select class="inp" name="role">
+            <option value="field">Floor team</option><option value="admin">Admin</option></select></div>
+          <div class="fld"><label>Temporary password</label>
+            <input class="inp" name="password" required minlength="8"></div>
+          <button class="btn" type="submit">Add</button>
+        </div>
+      </form>
+
+      <div class="tscroll" style="margin-top:14px"><table class="tbl">
+        <thead><tr><th>Name</th><th>Role</th><th class="tight">Actions</th></tr></thead>
+        <tbody>
+        {% for u in users %}
+          <tr>
+            <td><b>{{ u.full_name }}</b>
+              <div style="font-family:var(--mono);font-size:12px;color:var(--gray-700)">
+                {{ u.username }}{% if u.id not in members %} · not on this event{% endif %}</div></td>
+            <td>{% if u.role == 'admin' %}<span class="badge crit">Admin</span>
+                {% else %}<span class="badge mute">Floor</span>{% endif %}
+                {% if u.disabled_at %}<span class="badge err">disabled</span>{% endif %}
+                {% if u.locked_until %}<span class="badge crit">locked</span>{% endif %}</td>
+            <td class="tight">
+              <form class="rowform" method="post" action="/admin/users/{{ u.id }}/password">
+                <input class="inp" name="password" placeholder="new password" minlength="8"
+                       required style="width:140px;display:inline-block;padding:5px 8px">
+                <button class="btn sub tiny" type="submit">Set</button>
+              </form>
+              {% if u.id != user.id %}
+              <form class="rowform" method="post" action="/admin/users/{{ u.id }}/toggle">
+                <button class="btn {% if u.disabled_at %}sub{% else %}danger{% endif %} tiny"
+                        type="submit">{{ 'Enable' if u.disabled_at else 'Disable' }}</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="card">
+      <h2>Published updates</h2>
+      <div class="sub">"Done" counts how many of the floor team acknowledged an action item.</div>
+      {% if not updates %}<div class="empty"><b>Nothing posted yet</b></div>{% endif %}
+      {% for u in updates %}
+        <div class="fitem {% if u.level == 'urgent' %}urgent{% endif %}
+                    {% if u.pinned %}pinned{% endif %}" style="margin-bottom:8px">
+          <div class="fh">
+            {% if u.pinned %}<span class="badge mute">Pinned</span>{% endif %}
+            {% if u.level == 'urgent' %}<span class="badge crit">Urgent</span>{% endif %}
+            {% if u.is_action %}<span class="badge dark">{{ u.done_count }} done</span>{% endif %}
+            <span class="ft">{{ u.title }}</span>
+          </div>
+          {% if u.body %}<div class="fb">{{ u.body }}</div>{% endif %}
+          <form class="rowform" method="post" action="/admin/updates/{{ u.id }}/delete">
+            <button class="btn danger tiny" type="submit">Delete</button></form>
+        </div>
+      {% endfor %}
+    </div>
+
+    <div class="card">
+      <h2>Documents</h2>
+      {% if not documents %}<div class="empty"><b>No documents yet</b></div>{% endif %}
+      {% for d in documents %}
+        <div class="dcard" style="margin-bottom:8px">
+          <div class="dicon {% if d.filename.endswith('.pdf') %}pdf{% endif %}">
+            {{ d.filename.split('.')[-1][:4]|upper }}</div>
+          <div style="flex:1;min-width:0">
+            <div class="dn">{{ d.filename }}</div>
+            <div class="dm">{{ (d.size_bytes / 1024)|round|int }} KB ·
+              {{ d.client_name or 'General' }}{% if d.note %} · {{ d.note }}{% endif %}</div>
+            <form class="rowform" method="post" action="/admin/documents/{{ d.id }}/delete">
+              <button class="btn danger tiny" type="submit" style="margin-top:7px">Delete</button></form>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Leads from the floor</h2>
+  <div class="sub">Captured on device, synced when there is signal. "Captured" is the time on the
+    phone; a large skew means that phone's clock is wrong.</div>
+  <div class="tscroll"><table class="tbl">
+    <thead><tr><th class="tight">Captured</th><th>Name &amp; company</th><th>Contact</th>
+      <th>Interest</th><th>Next step</th><th>By</th><th class="tight">Skew</th></tr></thead>
+    <tbody>
+    {% for l in leads %}
+      <tr>
+        <td class="tight">{{ (l.captured_at or '')|replace('T',' ')|replace('Z','') }}</td>
+        <td><b>{{ l.name or '—' }}</b>
+          {% if l.company %}<div style="font-size:12px;color:var(--gray-700)">{{ l.company }}</div>{% endif %}</td>
+        <td style="font-size:12.5px">{{ l.email or '' }}
+          {% if l.phone %}<div>{{ l.phone }}</div>{% endif %}</td>
+        <td>{{ l.interest or '' }}
+          {% if l.notes %}<div style="font-size:12px;color:var(--gray-700)">{{ l.notes }}</div>{% endif %}</td>
+        <td>{{ l.next_step or '' }}</td>
+        <td>{{ l.by_name or '—' }}</td>
+        <td class="tight">{% if l.clock_skew_ms and (l.clock_skew_ms > 300000 or l.clock_skew_ms < -300000) %}
+          <span class="badge crit">{{ (l.clock_skew_ms / 60000)|round|int }} min</span>{% endif %}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" style="color:var(--gray-700)">No leads captured yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</div>
+
+{% endif %}
+</main>
+</body>
+</html>

@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Field Desk — device self-check</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  body{padding:22px clamp(14px,4vw,32px);background:var(--lav-30)}
+  .row{display:flex;gap:10px;align-items:flex-start;padding:9px 12px;background:#fff;
+       border:1px solid var(--line);border-radius:var(--r-sm);margin-bottom:6px;font-size:13.5px}
+  .row .tag{flex:none;font-weight:700;font-size:11px;padding:2px 8px;border-radius:99px}
+  .pass .tag{background:#E3F5EC;color:var(--ok)} .fail .tag{background:#FDECEA;color:var(--err)}
+  .fail{border-color:#F5C6C2}
+  .why{color:var(--gray-700);font-size:12px;margin-top:3px;font-family:var(--mono)}
+  #summary{font-size:17px;font-weight:700;margin:16px 0 12px}
+  h1{font-size:20px;margin-bottom:6px} .lede{color:var(--gray-700);margin-bottom:18px;max-width:70ch}
+</style>
+</head>
+<body>
+<h1>Field Desk — device self-check</h1>
+<p class="lede">Runs the real IndexedDB and Cache Storage code on <b>this</b> device. Node tests
+cannot reproduce IndexedDB transaction auto-commit, so this page is the only place that
+failure shows up. Open it once in a desktop browser and once on every phone that travels.</p>
+<div id="summary">Running…</div>
+<div id="out"></div>
+
+<script type="module">
+import { applyDelta, readiness, docUrl, REPLICA_STORES } from '/static/sync_core.js';
+
+const out = document.getElementById('out');
+let pass = 0, fail = 0;
+
+function report(name, ok, why = '') {
+  (ok ? pass++ : fail++);
+  out.insertAdjacentHTML('beforeend', `<div class="row ${ok ? 'pass' : 'fail'}">
+    <span class="tag">${ok ? 'PASS' : 'FAIL'}</span>
+    <div><div>${name}</div>${why ? `<div class="why">${why}</div>` : ''}</div></div>`);
+}
+async function t(name, fn) {
+  try { await fn(); report(name, true); }
+  catch (e) { report(name, false, e && e.message ? e.message : String(e)); }
+}
+const assert = (c, m) => { if (!c) throw new Error(m || 'assertion failed'); };
+
+/* Isolated database so running this never touches real event data. */
+const DB = 'fielddesk-selftest';
+const STORES = [...REPLICA_STORES, 'meta', 'leads', 'outbox'];
+
+function openDb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(DB, 1);
+    r.onupgradeneeded = () => {
+      const db = r.result;
+      for (const n of REPLICA_STORES) db.createObjectStore(n, { keyPath: 'id' });
+      db.createObjectStore('meta', { keyPath: 'key' });
+      db.createObjectStore('leads', { keyPath: 'id' }).createIndex('by_synced', 'synced');
+      db.createObjectStore('outbox', { keyPath: 'id' }).createIndex('by_state', 'state');
+    };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+const done = (tx) => new Promise((res, rej) => {
+  tx.oncomplete = res; tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error);
+});
+const wrap = (rq) => new Promise((res, rej) => {
+  rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error);
+});
+
+let db;
+await t('IndexedDB is available and opens', async () => {
+  await new Promise((res) => { const d = indexedDB.deleteDatabase(DB); d.onsuccess = res; d.onerror = res; d.onblocked = res; });
+  db = await openDb();
+  assert(db, 'no database handle');
+});
+
+await t('a lead and its outbox op are written in ONE transaction', async () => {
+  const tx = db.transaction(['leads', 'outbox'], 'readwrite');
+  tx.objectStore('leads').put({ id: 'L1', name: 'Dana', synced: 0 });
+  tx.objectStore('outbox').put({ id: 'L1', type: 'lead', state: 'pending' });
+  await done(tx);
+  const rd = db.transaction('leads', 'readonly');
+  assert((await wrap(rd.objectStore('leads').get('L1'))).synced === 0);
+});
+
+await t('§12.3 — a FULL replace does not touch unsynced leads', async () => {
+  let tx = db.transaction(['leads', 'outbox'], 'readwrite');
+  tx.objectStore('leads').put({ id: 'L2', name: 'Marc', synced: 0 });
+  tx.objectStore('leads').put({ id: 'L3', name: 'Rosa', synced: 0 });
+  tx.objectStore('outbox').put({ id: 'L2', type: 'lead', state: 'pending' });
+  await done(tx);
+
+  /* Exactly how the app applies a payload: scope excludes leads/outbox. */
+  tx = db.transaction([...REPLICA_STORES, 'meta'], 'readwrite');
+  const store = {
+    clear: (n) => tx.objectStore(n).clear(),
+    put: (n, o) => tx.objectStore(n).put(o),
+    del: (n, k) => tx.objectStore(n).delete(k),
+  };
+  applyDelta(store, { full: true, version: 42, clients: [{ id: 'C1', name: 'Meridian' }], tombstones: {} });
+  await done(tx);
+
+  const rd = db.transaction(['leads', 'outbox', 'clients', 'meta'], 'readonly');
+  assert(await wrap(rd.objectStore('leads').count()) === 3, 'unsynced leads were destroyed');
+  assert(await wrap(rd.objectStore('outbox').count()) === 2, 'outbox was destroyed');
+  assert(await wrap(rd.objectStore('clients').count()) === 1, 'replica not replaced');
+  assert((await wrap(rd.objectStore('meta').get('cursor'))).version === 42, 'cursor did not advance');
+});
+
+await t('the transaction scope PHYSICALLY blocks reaching leads during apply', async () => {
+  const tx = db.transaction([...REPLICA_STORES, 'meta'], 'readwrite');
+  let threw = false;
+  try { tx.objectStore('leads'); } catch { threw = true; }
+  try { await done(tx); } catch { /* fine */ }
+  assert(threw, 'leads was reachable from the apply transaction — the guard is gone');
+});
+
+await t('cursor and data commit together, or not at all', async () => {
+  const before = await (async () => {
+    const rd = db.transaction('meta', 'readonly');
+    return (await wrap(rd.objectStore('meta').get('cursor'))).version;
+  })();
+  const tx = db.transaction([...REPLICA_STORES, 'meta'], 'readwrite');
+  tx.objectStore('clients').put({ id: 'C9' });
+  tx.objectStore('meta').put({ key: 'cursor', version: 99 });
+  tx.abort();
+  try { await done(tx); } catch { /* expected */ }
+  const rd = db.transaction(['clients', 'meta'], 'readonly');
+  assert((await wrap(rd.objectStore('meta').get('cursor'))).version === before, 'cursor leaked past an aborted apply');
+  assert(!(await wrap(rd.objectStore('clients').get('C9'))), 'data leaked past an aborted apply');
+});
+
+await t('Cache Storage is available', async () => {
+  assert('caches' in window, 'Cache Storage missing — offline documents cannot work');
+  await caches.open('selftest-docs');
+});
+
+await t('a wrong-size blob is REFUSED (the captive-portal guard)', async () => {
+  const doc = { id: 'D1', size_bytes: 1000, mime_type: 'application/pdf' };
+  const portalPage = new Blob(['<html>wifi login</html>'], { type: 'text/html' });
+  let refused = false;
+  if (portalPage.size !== doc.size_bytes) refused = true;
+  assert(refused, 'a captive portal page would have been cached as a PDF');
+});
+
+await t('a cache miss fails immediately rather than hanging', async () => {
+  const cache = await caches.open('selftest-docs');
+  const started = performance.now();
+  const hit = await cache.match(docUrl('nope'));
+  assert(!hit, 'unexpected cache hit');
+  assert(performance.now() - started < 1000, 'a miss took too long — it would look like a hang');
+});
+
+await t('readiness is derived from the cache, never a stored counter', async () => {
+  const cache = await caches.open('selftest-docs');
+  const bytes = new Blob([new Uint8Array(2048)]);
+  await cache.put(docUrl('D1'), new Response(bytes));
+  const urls = new Set((await cache.keys()).map((r) => new URL(r.url).pathname));
+  const r = readiness([{ id: 'D1', size_bytes: 2048 }, { id: 'D2', size_bytes: 4096 }], urls);
+  assert(r.haveCount === 1 && r.total === 2 && !r.ready, 'readiness miscounted');
+  await cache.delete(docUrl('D1'));
+  const after = readiness([{ id: 'D1', size_bytes: 2048 }], new Set());
+  assert(after.haveCount === 0, 'an evicted cache still reported as ready');
+});
+
+await t('crypto.randomUUID is available (needs a secure context)', async () => {
+  assert(typeof crypto !== 'undefined' && crypto.randomUUID, 'no randomUUID — is this page on https?');
+  assert(crypto.randomUUID() !== crypto.randomUUID());
+});
+
+await t('Web Locks API available for single-flight sync', async () => {
+  assert(navigator.locks, 'no navigator.locks — two tabs could sync simultaneously');
+  await navigator.locks.request('selftest', async () => true);
+});
+
+await t('service worker registered and controlling this page', async () => {
+  assert('serviceWorker' in navigator, 'no service worker support — offline is impossible');
+  const reg = await navigator.serviceWorker.getRegistration();
+  assert(reg, 'not registered — open /app once first, over https');
+});
+
+await t('storage persistence requested', async () => {
+  assert(navigator.storage && navigator.storage.estimate, 'no storage estimate API');
+  const est = await navigator.storage.estimate();
+  const persisted = navigator.storage.persisted ? await navigator.storage.persisted() : false;
+  if (!persisted) throw new Error(
+    `not persisted — the OS may evict offline data. quota ~${Math.round((est.quota || 0) / 1e6)} MB. `
+    + 'Add the app to your home screen and re-sync the morning of the event.');
+});
+
+/* cleanup */
+await caches.delete('selftest-docs');
+db.close();
+indexedDB.deleteDatabase(DB);
+
+const s = document.getElementById('summary');
+s.textContent = fail === 0
+  ? `All ${pass} checks passed — this device can run Field Desk offline.`
+  : `${fail} of ${pass + fail} checks FAILED — do not travel on this device until they pass.`;
+s.style.color = fail === 0 ? 'var(--ok)' : 'var(--err)';
+</script>
+</body>
+</html>

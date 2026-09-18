@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/bin/python -m unittest tests.test_sync)",
+      "Bash(curl -s -o /dev/null -w 'sync=%{http_code}\\\\n' localhost:8099/api/v1/events/__CMDSUB_OUTPUT__/sync)",
+      "Bash(curl -s -o /dev/null -w 'outbox=%{http_code}\\\\n' -X POST localhost:8099/api/v1/events/__CMDSUB_OUTPUT__/outbox -H 'content-type: application/json' -d '{\"ops\":[]}')",
+      "Bash(curl -s -o /dev/null -w 'leads=%{http_code}\\\\n' localhost:8099/api/v1/events/__CMDSUB_OUTPUT__/leads)",
+      "Bash(curl -s localhost:8099/api/v1/events/__CMDSUB_OUTPUT__/sync)",
+      "Bash(node --test tests/)",
+      "Bash(node --test tests/sync_core.test.js)",
+      "Bash(.venv/bin/python smoke.py --password 'FieldDesk2026!')",
+      "Bash(cp /tmp/p1/hash.mjs tools/phase1_hash.mjs)",
+      "Bash(.venv/bin/python -m unittest tests.test_phase1_bridge)"
+    ]
+  }
+}

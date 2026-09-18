@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="FBSPL Field Desk">
+  <rect width="512" height="512" rx="96" fill="#002CCE"/>
+  <text x="256" y="300" text-anchor="middle" font-family="Futura PT, Century Gothic, Avenir, sans-serif"
+        font-size="132" font-weight="700" letter-spacing="6" fill="#FFFFFF">FD</text>
+  <rect x="150" y="340" width="212" height="14" rx="7" fill="#FC921F"/>
+</svg>

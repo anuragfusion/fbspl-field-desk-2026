@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+fielddesk.db
+fielddesk.db-wal
+fielddesk.db-shm
+storage/
+.event_id
+*.xlsx
+!sample_clients.xlsx

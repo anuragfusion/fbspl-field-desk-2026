@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Field Desk — admin sign in</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="gate" style="display:block">
+  <div class="gate-in">
+    <div class="gate-art">
+      <div class="brandslot"><div><div class="bm">FBSPL</div>
+        <div class="bs">Fusion Business Solutions</div></div></div>
+      <div>
+        <h2>Field Desk — office</h2>
+        <p class="lede">Publish client briefs, documents, the schedule and live updates.
+          Everything you publish reaches the floor team on their next sync.</p>
+      </div>
+      <div class="evt">
+        <div><b>Applied Net 2026</b>Gaylord National, Washington DC</div>
+        <div><b>Floor team?</b>Use <a href="/app" style="color:#fff">the app</a> instead</div>
+      </div>
+    </div>
+    <div class="gate-form">
+      <div class="box">
+        <h3>Admin sign in</h3>
+        <div class="sub">Admin accounts only. Floor accounts use /app.</div>
+        {% if error %}<div class="gate-err on">{{ error }}</div>{% endif %}
+        <form method="post" action="/admin/login">
+          <div class="fld"><label for="u">Username</label>
+            <input class="inp" id="u" name="username" autocapitalize="none"
+                   spellcheck="false" autocomplete="username" required autofocus></div>
+          <div class="fld"><label for="p">Password</label>
+            <input class="inp" id="p" name="password" type="password"
+                   autocomplete="current-password" required></div>
+          <button class="btn" type="submit">Sign in</button>
+        </form>
+        <div class="gate-foot">
+          No self-service reset by design — there is no mail server in this deployment.
+          If you are locked out, another admin resets your password, or use
+          <code>python -m app.cli reset-password</code> on the server.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
