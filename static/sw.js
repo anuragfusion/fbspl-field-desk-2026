@@ -6,7 +6,7 @@
  * nags if they differ.
  */
 
-const SHELL_VERSION = 6;
+const SHELL_VERSION = 7;
 const SHELL = `shell-v${SHELL_VERSION}`;
 const DOCS = 'docs-v1';
 

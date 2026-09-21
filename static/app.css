@@ -26,6 +26,7 @@ button,input,select,textarea{font:inherit;color:inherit}
 .brandslot{display:flex;align-items:center;gap:8px;padding:7px 12px;background:#fff;
   border-radius:var(--r-sm);flex:none}
 .brandslot .logo-img{height:20px;width:auto;display:block}
+@media(min-width:700px){.brandslot .logo-img{height:30px}}
 .brandslot .bs{font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;
   color:var(--gray-700);line-height:1;margin-top:3px}
 .mh-t{flex:1 1 200px;min-width:0}
