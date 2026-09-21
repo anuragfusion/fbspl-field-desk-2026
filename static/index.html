@@ -17,7 +17,7 @@
 <div class="gate" id="gate" role="dialog" aria-modal="true" aria-label="Sign in to FBSPL Field Desk">
   <div class="gate-in">
     <div class="gate-art">
-      <div class="brandslot"><div><div class="bm">FBSPL</div>
+      <div class="brandslot"><div><img class="logo-img" src="/static/fbspl_logo.png" alt="FBSPL">
         <div class="bs">Fusion Business Solutions</div></div></div>
       <div>
         <h2>Field Desk</h2>
@@ -55,7 +55,7 @@
 </div>
 
 <header class="masthead" id="masthead">
-  <div class="brandslot"><div><div class="bm">FBSPL</div>
+  <div class="brandslot"><div><img class="logo-img" src="/static/fbspl_logo.png" alt="FBSPL">
     <div class="bs">Fusion Business Solutions</div></div></div>
   <div class="mh-t">
     <div class="kick"><span id="evtName">—</span> · <span id="evtVenue"></span></div>
@@ -101,6 +101,25 @@
         <button class="chip" aria-pressed="false" data-v="must">Must meet</button>
         <button class="chip" aria-pressed="false" data-v="target">Target</button>
         <button class="chip" aria-pressed="false" data-v="watch">Watch</button>
+      </div>
+      <button class="chip" id="collapseAllBtn" type="button" aria-pressed="false">Collapse all</button>
+    </div>
+    <div class="rowtools" style="margin-bottom:13px; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+      <div class="fld" style="min-width:180px; flex:1 1 180px;">
+        <label for="fAM">Account manager</label>
+        <select class="inp" id="fAM"><option value="all">All Account Managers</option></select>
+      </div>
+      <div class="fld" style="min-width:180px; flex:1 1 180px;">
+        <label for="fAMS">AMS</label>
+        <select class="inp" id="fAMS"><option value="all">All AMS</option></select>
+      </div>
+      <div class="fld" style="min-width:180px; flex:1 1 180px;">
+        <label for="fStatus">Status</label>
+        <select class="inp" id="fStatus"><option value="all">All Status</option></select>
+      </div>
+      <div class="fld" style="min-width:180px; flex:1 1 180px;">
+        <label for="fHealth">Health</label>
+        <select class="inp" id="fHealth"><option value="all">All Health</option></select>
       </div>
     </div>
     <div class="cards" id="clientCards"></div>

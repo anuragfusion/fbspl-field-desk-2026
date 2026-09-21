@@ -107,6 +107,45 @@ def flag_of(txt: Any) -> str:
     return ""
 
 
+_FALSY_ACTIVITY = {"", "0", "no", "n", "na", "n/a", "false", "-"}
+
+
+def truthy_activity(v: Any) -> bool:
+    """Mirrors the JS `truthy()` used to mark a P&C/EB service column as in scope."""
+    if v is None:
+        return False
+    if isinstance(v, (int, float)):
+        return v > 0
+    return str(v).strip().lower() not in _FALSY_ACTIVITY
+
+
+def activity_count(v: Any) -> int | None:
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return None
+    return int(n) if n > 0 else None
+
+
+def find_activity_columns(raw_headers: list, hdrs: list[str]) -> list[dict]:
+    """Any column headed "P&C - <service>" or "EB - <service>" is scope-of-service,
+    not a mapped field — same convention the Battlecards tool uses (§ svcGroup)."""
+    cols = []
+    for i, h in enumerate(hdrs):
+        hn = h.replace("–", "-").replace("—", "-")  # en/em dash -> hyphen
+        if hn.startswith("p&c -"):
+            line = "P&C"
+        elif hn.startswith("eb -"):
+            line = "EB"
+        else:
+            continue
+        raw = str(raw_headers[i] if i < len(raw_headers) and raw_headers[i] is not None else "")
+        raw = raw.replace("–", "-").replace("—", "-")
+        label = raw.split("-", 1)[1].strip() if "-" in raw else raw.strip()
+        cols.append({"idx": i, "line": line, "label": label or h})
+    return cols
+
+
 def _months_since(start: Any) -> int | None:
     if not start:
         return None
@@ -157,6 +196,50 @@ def fmt_dateish(v: Any) -> str:
     if isinstance(v, (datetime, date)):
         return v.strftime("%b %-d, %Y")
     return str(v)
+
+
+def build_cues(c: dict, start: Any, ai_level: Any, growth: Any) -> list[str]:
+    """"How to play it at the booth" — situational cues derived the same way the
+    Battlecards tool's `cues()` does, kept separate from the editorial
+    talking_points/avoid_points so an admin's own notes are never overwritten."""
+    sig = c["signals"]
+    out: list[str] = []
+    total_contacts = len(c["pocs"])
+    advocates = c.get("_advocates", 0)
+    vocal = c.get("_vocal", 0)
+
+    if sig.get("newClient"):
+        when = fmt_dateish(start) if start and not is_unknown(start) else ""
+        out.append(
+            f"Newly onboarded{f' (since {when})' if when else ''} — an early relationship; "
+            "the booth is a chance to build trust face-to-face and set up expansion.")
+    if sig.get("healthTone") == "crit":
+        am = c.get("account_manager") or "the account manager"
+        out.append(f"At-risk on last audit — handle carefully and loop in {am}.")
+    if vocal > 0:
+        out.append(
+            f"{vocal} contact{'s are' if vocal > 1 else ' is'} vocal/direct — "
+            "listen first, acknowledge feedback before pitching.")
+    if advocates > 0 and vocal == 0 and advocates == total_contacts and total_contacts > 0:
+        subject = ("The key contact is a strong advocate" if total_contacts == 1
+                   else "Every contact is an advocate")
+        out.append(f"{subject} — strong candidate for a testimonial, reference, or case study.")
+    elif advocates > 0:
+        out.append(
+            f"{advocates} advocate{'s' if advocates > 1 else ''} on this account — "
+            "natural reference/testimonial ask.")
+
+    acts = sig.get("activities") or []
+    on_count = sum(1 for a in acts if a["on"])
+    if acts and on_count < len(acts):
+        out.append(
+            f"Only {on_count} of {len(acts)} services in scope — "
+            "land-and-expand whitespace across the P&C / EB lifecycle.")
+    if re.search(r"high|strong|very", str(ai_level or ""), re.I):
+        out.append("AI interest is high — bring the automation / AI story.")
+    if is_unknown(growth) and is_unknown(ai_level):
+        out.append("Growth plans and AI interest aren't on file — good discovery questions for the booth.")
+    return out[:4]
 
 
 # --- column map (ported 1:1 from the JS `C = {...}`) -------------------------
@@ -224,6 +307,7 @@ def ingest_rows(rows: list[list]) -> list[dict]:
     name_col = C["company"] if C["company"] >= 0 else C["client"]
     if name_col < 0:
         raise ValueError('No "Company" or "Client Name" column in that sheet')
+    act_cols = find_activity_columns(rows[0], hdrs)
 
     by_key: dict[str, dict] = {}
     order: list[str] = []
@@ -259,6 +343,12 @@ def ingest_rows(rows: list[list]) -> list[dict]:
                 "pocs": [],
                 "tags": [],
                 "source_row_hash": _row_hash(row),
+                "_activities": {},
+                "_advocates": 0,
+                "_vocal": 0,
+                "_start_raw": start,
+                "_ai_level_raw": ai_level,
+                "_growth_raw": growth,
             }
 
             # Where we stand
@@ -339,15 +429,43 @@ def ingest_rows(rows: list[list]) -> list[dict]:
             by_key[key] = c
             order.append(key)
 
-        # POCs merge across every row belonging to this company.
+        # Scope of service: every row for the company can light up different
+        # P&C/EB columns, so this aggregates across the whole group like POCs do.
         c = by_key[key]
+        for ac in act_cols:
+            v = cell(row, ac["idx"])
+            entry_key = (ac["line"], ac["label"])
+            entry = c["_activities"].get(entry_key)
+            if entry is None:
+                entry = {"line": ac["line"], "label": ac["label"], "on": False, "count": None}
+                c["_activities"][entry_key] = entry
+            if truthy_activity(v):
+                entry["on"] = True
+                n = activity_count(v)
+                if n is not None:
+                    entry["count"] = max(entry["count"] or 0, n)
+
+        # POCs merge across every row belonging to this company.
         pn = str(cell(row, C["pocName"]) or "").strip()
         if pn and not is_unknown(pn) and not any(p["name"] == pn for p in c["pocs"]):
+            pc = cell(row, C["pocCmt"])
             hob = cell(row, C["hobbies"])
-            note = " · ".join(x for x in (cell(row, C["pocCmt"]),
+            note = " · ".join(x for x in (pc,
                                           f"Outside work: {hob}" if hob and not is_unknown(hob) else "")
                               if x and not is_unknown(x))
             c["pocs"].append({"name": pn, "title": cell(row, C["pocTitle"]) or "", "note": note})
+            poc_tone = flag_of(pc)
+            if poc_tone == "good":
+                c["_advocates"] += 1
+            elif poc_tone == "crit":
+                c["_vocal"] += 1
+
+    for k in order:
+        c = by_key[k]
+        c["signals"]["activities"] = list(c.pop("_activities").values())
+        c["signals"]["cues"] = build_cues(
+            c, c["_start_raw"], c["_ai_level_raw"], c["_growth_raw"])
+        del c["_start_raw"], c["_ai_level_raw"], c["_growth_raw"], c["_advocates"], c["_vocal"]
 
     return [by_key[k] for k in order]
 
@@ -374,6 +492,7 @@ def pick_sheet(path) -> tuple[str, list[list]]:
 def unmapped_columns(rows: list[list]) -> list[str]:
     hdrs = [norm_hdr(h) for h in rows[0]]
     used = {i for i in resolve_columns(hdrs).values() if i >= 0}
+    used |= {ac["idx"] for ac in find_activity_columns(rows[0], hdrs)}
     return [rows[0][i] for i in range(len(hdrs)) if i not in used and hdrs[i]]
 
 

@@ -17,8 +17,10 @@ os.environ["FIELDDESK_STORAGE"] = str(Path(_TMP) / "storage")
 from openpyxl import Workbook                                          # noqa: E402
 
 from app.db import db, init_db, new_id                                 # noqa: E402
-from app.importer import (health_tone, import_workbook, ingest_rows,   # noqa: E402
-                          money, pick_sheet, score_headers, tenure_from)
+from app.importer import (build_cues, find_activity_columns,           # noqa: E402
+                          health_tone, import_workbook, ingest_rows,
+                          money, norm_hdr, pick_sheet, score_headers,
+                          tenure_from, truthy_activity)
 
 HEADERS = [
     "Company", "Priority", "Booth Owner", "Account Manager", "UM Name", "Team Name",
@@ -160,6 +162,89 @@ class IngestTests(unittest.TestCase):
         self.assertEqual(sig["revenue"], "$24M")
         self.assertEqual(sig["ai"], "High")
         self.assertEqual((sig["pl"], sig["cl"], sig["eb"]), ("55", "40", "5"))
+
+
+ACTIVITY_HEADERS = HEADERS + [
+    "P&C - Policy Checking", "P&C – Renewals", "EB - Enrollment",
+]
+# Meridian: row 1 lights up policy checking only; row 2 (same company, second POC)
+# also lights up renewals with a count. EB - Enrollment stays off both rows ->
+# whitespace. Escalated contact -> "vocal", second contact -> "advocate".
+MERIDIAN_ACT1 = MERIDIAN + ["Yes", "", ""]
+MERIDIAN_ACT2 = MERIDIAN_POC2 + ["Yes", "3", ""]
+# Cascade: single row, single advocate contact, everything off -> full whitespace cue.
+CASCADE_ACT = CASCADE[:26] + [
+    "Alvaro Reyes", "Owner", "Champion, referenceable", "Sailing",
+] + ["", "", ""]
+
+
+class ActivitiesAndCuesTests(unittest.TestCase):
+    """Scope-of-service parsing and the "how to play it at the booth" cues,
+    the two panels the Battlecards tool renders that this importer must feed."""
+
+    @classmethod
+    def setUpClass(cls):
+        init_db()
+        cls.path = Path(_TMP) / "activities.xlsx"
+        build_workbook(cls.path, [MERIDIAN_ACT1, MERIDIAN_ACT2, CASCADE_ACT],
+                       sheet_name="Client Master")
+        cls._headers_backup = list(HEADERS)
+        # build_workbook always appends the module-level HEADERS row; swap it
+        # for the activity-bearing header list for just this workbook.
+        wb_headers = ACTIVITY_HEADERS
+        from openpyxl import load_workbook as _lw
+        wb = _lw(cls.path)
+        ws = wb["Client Master"]
+        for i, h in enumerate(wb_headers, start=1):
+            ws.cell(row=2, column=i, value=h)
+        wb.save(cls.path)
+
+        sheet, rows = pick_sheet(cls.path)
+        cls.clients = ingest_rows(rows)
+        cls.by_name = {c["name"]: c for c in cls.clients}
+
+    def test_finds_pc_and_eb_activity_columns_by_prefix(self):
+        hdrs = [norm_hdr(h) for h in ACTIVITY_HEADERS]
+        cols = find_activity_columns(ACTIVITY_HEADERS, hdrs)
+        self.assertEqual([(c["line"], c["label"]) for c in cols],
+                         [("P&C", "Policy Checking"), ("P&C", "Renewals"), ("EB", "Enrollment")])
+
+    def test_truthy_activity_rules(self):
+        self.assertTrue(truthy_activity("Yes"))
+        self.assertTrue(truthy_activity(3))
+        self.assertFalse(truthy_activity("No"))
+        self.assertFalse(truthy_activity("0"))
+        self.assertFalse(truthy_activity(""))
+        self.assertFalse(truthy_activity(None))
+
+    def test_activities_aggregate_across_rows_of_the_same_company(self):
+        acts = {a["label"]: a for a in self.by_name["Meridian Insurance Group"]["signals"]["activities"]}
+        self.assertTrue(acts["Policy Checking"]["on"])
+        self.assertTrue(acts["Renewals"]["on"], "second row for the same company must still count")
+        self.assertEqual(acts["Renewals"]["count"], 3)
+        self.assertFalse(acts["Enrollment"]["on"])
+
+    def test_whitespace_cue_fires_when_not_every_service_is_in_scope(self):
+        cues = self.by_name["Cascade Risk Advisors"]["signals"]["cues"]
+        self.assertTrue(any("0 of 3 services in scope" in c for c in cues))
+
+    def test_at_risk_cue_names_the_account_manager(self):
+        cues = self.by_name["Cascade Risk Advisors"]["signals"]["cues"]
+        self.assertTrue(any("handle carefully and loop in S. Mehta" in c for c in cues))
+
+    def test_single_advocate_contact_gets_the_testimonial_cue(self):
+        cues = self.by_name["Cascade Risk Advisors"]["signals"]["cues"]
+        self.assertTrue(any("strong candidate for a testimonial" in c for c in cues))
+
+    def test_build_cues_caps_at_four(self):
+        c = {
+            "signals": {"newClient": True, "healthTone": "crit", "activities": [
+                {"line": "P&C", "label": "A", "on": False, "count": None}]},
+            "pocs": [{"name": "X"}], "account_manager": "R. Shah",
+            "_advocates": 0, "_vocal": 1,
+        }
+        cues = build_cues(c, date(2026, 6, 1), "High", "")
+        self.assertLessEqual(len(cues), 4)
 
 
 class CommitTests(unittest.TestCase):

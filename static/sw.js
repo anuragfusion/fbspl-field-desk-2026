@@ -6,7 +6,7 @@
  * nags if they differ.
  */
 
-const SHELL_VERSION = 4;
+const SHELL_VERSION = 6;
 const SHELL = `shell-v${SHELL_VERSION}`;
 const DOCS = 'docs-v1';
 
@@ -14,11 +14,13 @@ const SHELL_URLS = [
   '/app',
   '/static/app.css',
   '/static/app.js',
+  '/static/client_filters.js',
   '/static/idb.js',
   '/static/sync.js',
   '/static/sync_core.js',
   '/static/docs.js',
   '/static/manifest.webmanifest',
+  '/static/fbspl_logo.png',
 ];
 
 /* cache.addAll() reads through the HTTP cache. /static is served without a

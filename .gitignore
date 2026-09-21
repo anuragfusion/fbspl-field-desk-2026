@@ -3,6 +3,7 @@ venv/
 .claude/
 __pycache__/
 *.pyc
+.DS_Store
 fielddesk.db
 fielddesk.db-wal
 fielddesk.db-shm

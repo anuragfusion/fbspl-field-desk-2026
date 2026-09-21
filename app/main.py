@@ -200,7 +200,7 @@ def app_shell():
 def version():
     """The shell has no content hashes (no build step), so the app compares its
     own SHELL_VERSION against this and nags when they drift."""
-    return {"shell_version": 4, "time": now_iso()}
+    return {"shell_version": 6, "time": now_iso()}
 
 
 @app.get("/healthz", include_in_schema=False)

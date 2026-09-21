@@ -6,6 +6,7 @@ import * as docsmod from './docs.js';
 import * as idb from './idb.js';
 import * as sync from './sync.js';
 import { formatReadiness } from './sync_core.js';
+import * as clientFilters from './client_filters.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? '' : s)
@@ -126,13 +127,46 @@ function sigStrip(c) {
   return out.length ? `<div class="sig">${out.join('')}</div>` : '';
 }
 
+/* Scope of service & whitespace — grouped by P&C / EB, one checklist per line.
+ * Fed by signals.activities (see importer.py find_activity_columns). */
+function scopeBlock(c) {
+  const acts = (c.signals && c.signals.activities) || [];
+  if (!acts.length) return '';
+  const order = [];
+  const groups = {};
+  for (const a of acts) {
+    if (!groups[a.line]) { groups[a.line] = []; order.push(a.line); }
+    groups[a.line].push(a);
+  }
+  const cols = order.map((line) => {
+    const items = groups[line];
+    const on = items.filter((a) => a.on).length;
+    const rows = items.map((a) => `<li class="${a.on ? 'on' : 'off'}">
+      <span class="tick">${a.on ? '✓' : ''}</span>${esc(a.label)}${
+        a.on && a.count ? `<span class="cnt">${esc(a.count)}</span>` : ''}</li>`).join('');
+    return `<div class="svc-col"><div class="svc-h">${esc(line)}
+      <span class="svc-count">${on} / ${items.length}</span></div>
+      <ul class="svc-list">${rows}</ul></div>`;
+  }).join('');
+  return `<div class="blk svc"><div class="bt">Scope of service &amp; whitespace</div>
+    <div class="svc-grid">${cols}</div></div>`;
+}
+
+/* How to play it at the booth — situational cues (see importer.py build_cues). */
+function cuesBlock(c) {
+  const cues = (c.signals && c.signals.cues) || [];
+  if (!cues.length) return '';
+  return `<div class="blk cues"><div class="bt">How to play it at the booth</div>
+    <ul>${cues.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></div>`;
+}
+
 function clientCard(c) {
   const docs = S.documents.filter((d) => d.client_id === c.id);
   const pocs = pocsFor(c.id);
   const mtgs = S.meetings.filter((m) => m.client_id === c.id);
   const list = (arr) => arr.map((s) => `<li>${esc(s)}</li>`).join('');
   return `<article class="ccard p-${esc(c.priority || 'watch')}">
-    <header>
+    <header class="ctop" role="button" tabindex="0" aria-expanded="true">
       <div style="display:flex;gap:9px;align-items:flex-start;justify-content:space-between">
         <div class="cname">${esc(c.name)}</div>
         <span class="badge ${c.priority === 'must' ? 'crit' : c.priority === 'target' ? '' : 'mute'}">
@@ -143,26 +177,31 @@ function clientCard(c) {
         ${c.product ? `<span>· ${esc(c.product)}</span>` : ''}
         ${c.owner ? `<span>· Owner: <b>${esc(c.owner)}</b></span>` : ''}
       </div>
+      <span class="ctog" aria-hidden="true">▾</span>
     </header>
     <div class="cbody">
       ${sigStrip(c)}
       ${c.summary ? `<div class="blk"><div class="bt">Where we stand</div>
         <div style="font-size:13.5px">${esc(c.summary)}</div></div>` : ''}
-      ${(c.talking_points || []).length ? `<div class="blk say"><div class="bt">Key points to make</div>
-        <ul>${list(c.talking_points)}</ul></div>` : ''}
-      ${(c.avoid_points || []).length ? `<div class="blk avoid"><div class="bt">Do not raise</div>
-        <ul>${list(c.avoid_points)}</ul></div>` : ''}
-      ${pocs.length ? `<div class="blk"><div class="bt">Who you will meet</div>
-        ${pocs.map((p) => `<div class="poc"><div class="pn">${esc(p.name)}${
-          p.title ? ` <span class="pt">— ${esc(p.title)}</span>` : ''}</div>${
-          p.note ? `<div style="font-size:12.5px;color:var(--gray-700);margin-top:3px">${esc(p.note)}</div>` : ''
-        }</div>`).join('')}</div>` : ''}
-      ${mtgs.length ? `<div class="blk"><div class="bt">Scheduled</div>${mtgs.map((m) =>
-        `<div style="font-size:13px">${esc(m.meeting_date || '')} · ${esc(m.start_time || 'TBD')}${
-          m.location ? ` · ${esc(m.location)}` : ''}</div>`).join('')}</div>` : ''}
-      ${docs.length ? `<div class="blk"><div class="bt">Attached documents</div><div class="attach">
-        ${docs.map((d) => `<a data-doc="${esc(d.id)}">${esc(d.filename)}</a>`).join('')}
-      </div></div>` : ''}
+      <div class="cbody-more">
+        ${(c.talking_points || []).length ? `<div class="blk say"><div class="bt">Key points to make</div>
+          <ul>${list(c.talking_points)}</ul></div>` : ''}
+        ${(c.avoid_points || []).length ? `<div class="blk avoid"><div class="bt">Do not raise</div>
+          <ul>${list(c.avoid_points)}</ul></div>` : ''}
+        ${scopeBlock(c)}
+        ${pocs.length ? `<div class="blk"><div class="bt">Who you will meet</div>
+          ${pocs.map((p) => `<div class="poc"><div class="pn">${esc(p.name)}${
+            p.title ? ` <span class="pt">— ${esc(p.title)}</span>` : ''}</div>${
+            p.note ? `<div style="font-size:12.5px;color:var(--gray-700);margin-top:3px">${esc(p.note)}</div>` : ''
+          }</div>`).join('')}</div>` : ''}
+        ${cuesBlock(c)}
+        ${mtgs.length ? `<div class="blk"><div class="bt">Scheduled</div>${mtgs.map((m) =>
+          `<div style="font-size:13px">${esc(m.meeting_date || '')} · ${esc(m.start_time || 'TBD')}${
+            m.location ? ` · ${esc(m.location)}` : ''}</div>`).join('')}</div>` : ''}
+        ${docs.length ? `<div class="blk"><div class="bt">Attached documents</div><div class="attach">
+          ${docs.map((d) => `<a data-doc="${esc(d.id)}">${esc(d.filename)}</a>`).join('')}
+        </div></div>` : ''}
+      </div>
     </div>
     <footer>
       <div class="chips">${(c.tags || []).map((t) => `<span class="badge mute">${esc(t)}</span>`).join('')}</div>
@@ -171,27 +210,69 @@ function clientCard(c) {
   </article>`;
 }
 
+function getClientFilterValues() {
+  return {
+    accountManager: $('fAM') ? $('fAM').value : 'all',
+    ams: $('fAMS') ? $('fAMS').value : 'all',
+    status: $('fStatus') ? $('fStatus').value : 'all',
+    health: $('fHealth') ? $('fHealth').value : 'all',
+  };
+}
+
+function populateClientFilterOptions() {
+  const opts = clientFilters.collectClientFilterOptions(S.clients);
+  const filters = [
+    { select: $('fAM'), values: opts.accountManagers, label: 'All Account Managers' },
+    { select: $('fAMS'), values: opts.ams, label: 'All AMS' },
+    { select: $('fStatus'), values: opts.statuses, label: 'All Status' },
+    { select: $('fHealth'), values: opts.healths, label: 'All Health' },
+  ];
+
+  for (const item of filters) {
+    if (!item.select) continue;
+    const current = item.select.value || 'all';
+    item.select.innerHTML = `<option value="all">${item.label}</option>${item.values
+      .map((value) => `<option value="${esc(value)}">${esc(value)}</option>`).join('')}`;
+    const valid = item.values.some((value) => value.toLowerCase() === current.toLowerCase());
+    item.select.value = valid ? current : 'all';
+  }
+}
+
 function renderClients() {
   const q = ($('qClients').value || '').trim().toLowerCase();
   const pri = [...document.querySelectorAll('#cPriority .chip[aria-pressed="true"]')]
     .map((b) => b.dataset.v);
   const rank = { must: 0, target: 1, watch: 2 };
-  const list = S.clients.filter((c) => {
-    if (pri.length && !pri.includes(c.priority)) return false;
-    if (!q) return true;
-    const hay = [c.name, c.owner, c.account_manager, c.location, c.product, c.summary,
-      (c.talking_points || []).join(' '), (c.avoid_points || []).join(' '),
-      pocsFor(c.id).map((p) => `${p.name} ${p.title}`).join(' ')].join(' ').toLowerCase();
-    return hay.includes(q);
-  }).sort((a, b) => (rank[a.priority] ?? 3) - (rank[b.priority] ?? 3)
+  const list = S.clients.filter((c) => clientFilters.matchesClientFilter(
+    c,
+    q,
+    pri,
+    getClientFilterValues(),
+  )).sort((a, b) => (rank[a.priority] ?? 3) - (rank[b.priority] ?? 3)
     || String(a.name).localeCompare(String(b.name)));
 
   $('clientCards').innerHTML = list.length
     ? list.map(clientCard).join('')
     : `<div class="empty" style="grid-column:1/-1"><b>${
       S.clients.length ? 'No client matches those filters' : 'No client briefs yet'}</b>${
-      S.clients.length ? 'Clear the search or priority chips.'
+      S.clients.length ? 'Clear the search or filter dropdowns.'
         : 'Ask the office to publish the briefing pack, then pull to refresh.'}</div>`;
+  applyCardCollapse();
+}
+
+/* Card collapse: a global "Collapse all"/"Expand all" toggle, plus each card's
+ * own header can be tapped to flip just that one card. Re-rendering (search,
+ * filters) re-applies the last global state to every card. */
+let cardsCollapsed = false;
+
+function setCardCollapsed(card, collapsed) {
+  card.classList.toggle('collapsed', collapsed);
+  const top = card.querySelector('.ctop');
+  if (top) top.setAttribute('aria-expanded', String(!collapsed));
+}
+
+function applyCardCollapse() {
+  document.querySelectorAll('#clientCards .ccard').forEach((card) => setCardCollapsed(card, cardsCollapsed));
 }
 
 function renderFeed() {
@@ -279,6 +360,7 @@ function renderLeads() {
 }
 
 function renderAll() {
+  populateClientFilterOptions();
   $('pClients').textContent = S.clients.length;
   $('pDocs').textContent = S.documents.length;
   $('pSched').textContent = S.meetings.length;
@@ -401,11 +483,38 @@ function bind() {
   });
 
   $('qClients').oninput = renderClients;
+  ['fAM', 'fAMS', 'fStatus', 'fHealth'].forEach((id) => {
+    const el = $(id);
+    if (el) el.onchange = renderClients;
+  });
   document.querySelectorAll('#cPriority .chip').forEach((b) => {
     b.onclick = () => {
       b.setAttribute('aria-pressed', b.getAttribute('aria-pressed') !== 'true');
       renderClients();
     };
+  });
+
+  $('collapseAllBtn').onclick = () => {
+    cardsCollapsed = !cardsCollapsed;
+    applyCardCollapse();
+    $('collapseAllBtn').textContent = cardsCollapsed ? 'Expand all' : 'Collapse all';
+    $('collapseAllBtn').setAttribute('aria-pressed', String(cardsCollapsed));
+  };
+
+  const toggleCard = (top) => {
+    const card = top.closest('.ccard');
+    if (card) setCardCollapsed(card, !card.classList.contains('collapsed'));
+  };
+  $('clientCards').addEventListener('click', (e) => {
+    const top = e.target.closest('.ctop');
+    if (top) toggleCard(top);
+  });
+  $('clientCards').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const top = e.target.closest('.ctop');
+    if (!top) return;
+    e.preventDefault();
+    toggleCard(top);
   });
 
   $('addLead').onclick = () => logLead(null);
