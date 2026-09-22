@@ -36,14 +36,14 @@ def _ask_password(prompt="Password (blank to generate): ") -> tuple[str, bool]:
 
 
 def _create_user(conn, username, name, role, password, must_change):
-    if conn.execute("SELECT 1 FROM users WHERE username = ? COLLATE NOCASE", (username,)).fetchone():
+    if conn.execute("SELECT 1 FROM users WHERE username = %s", (username,)).fetchone():
         sys.exit(f"Username already taken: {username}")
     uid = new_id()
     conn.execute(
         "INSERT INTO users (id, username, full_name, role, password_hash,"
-        " must_change_password, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+        " must_change_password, created_at, updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
         (uid, username, name or username, role, A.hash_password(password),
-         1 if must_change else 0, now_iso(), now_iso()))
+         bool(must_change), now_iso(), now_iso()))
     audit(conn, None, "user.create", "user", uid, {"username": username, "role": role})
     return uid
 
@@ -70,14 +70,14 @@ def cmd_add_user(args):
 
 def cmd_reset_password(args):
     with db() as conn:
-        row = conn.execute("SELECT id FROM users WHERE username = ? COLLATE NOCASE",
+        row = conn.execute("SELECT id FROM users WHERE username = %s",
                            (args.username,)).fetchone()
         if not row:
             sys.exit(f"No such user: {args.username}")
         password, generated = _ask_password()
         conn.execute(
-            "UPDATE users SET password_hash = ?, must_change_password = 1, failed_attempts = 0,"
-            " last_failed_at = NULL, locked_until = NULL, updated_at = ? WHERE id = ?",
+            "UPDATE users SET password_hash = %s, must_change_password = TRUE, failed_attempts = 0,"
+            " last_failed_at = NULL, locked_until = NULL, updated_at = %s WHERE id = %s",
             (A.hash_password(password), now_iso(), row["id"]))
         n = A.revoke_all_sessions(conn, row["id"])   # §12.2
         audit(conn, None, "user.reset_password", "user", row["id"], {"sessions_revoked": n})
@@ -91,27 +91,28 @@ def cmd_create_event(args):
         eid = new_id()
         conn.execute(
             "INSERT INTO events (id, name, venue, city, country, starts_on, ends_on, timezone)"
-            " VALUES (?,?,?,?,?,?,?,?)",
+            " VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
             (eid, args.name, args.venue, args.city, args.country,
              args.starts, args.ends, args.timezone))
         # Every admin is a member so the event shows up without extra setup.
         for u in conn.execute("SELECT id FROM users WHERE role='admin'").fetchall():
             conn.execute("INSERT INTO event_members (id, event_id, user_id, event_role, added_at)"
-                         " VALUES (?,?,?,?,?)", (new_id(), eid, u["id"], "organiser", now_iso()))
+                         " VALUES (%s,%s,%s,%s,%s)", (new_id(), eid, u["id"], "organiser", now_iso()))
     print(eid)
 
 
 def cmd_add_member(args):
     with db() as conn:
-        u = conn.execute("SELECT id FROM users WHERE username = ? COLLATE NOCASE",
+        u = conn.execute("SELECT id FROM users WHERE username = %s",
                          (args.username,)).fetchone()
         if not u:
             sys.exit(f"No such user: {args.username}")
-        if not conn.execute("SELECT 1 FROM events WHERE id = ?", (args.event,)).fetchone():
+        if not conn.execute("SELECT 1 FROM events WHERE id = %s", (args.event,)).fetchone():
             sys.exit(f"No such event: {args.event}")
         conn.execute(
-            "INSERT OR IGNORE INTO event_members (id, event_id, user_id, event_role, added_at)"
-            " VALUES (?,?,?,?,?)", (new_id(), args.event, u["id"], args.event_role, now_iso()))
+            "INSERT INTO event_members (id, event_id, user_id, event_role, added_at)"
+            " VALUES (%s,%s,%s,%s,%s) ON CONFLICT (event_id, user_id) DO NOTHING",
+            (new_id(), args.event, u["id"], args.event_role, now_iso()))
     print(f"{args.username} added to event {args.event} as {args.event_role}")
 
 
@@ -123,7 +124,7 @@ def cmd_import_workbook(args):
     """
     from .importer import import_workbook
     with db() as conn:
-        if not conn.execute("SELECT 1 FROM events WHERE id = ?", (args.event,)).fetchone():
+        if not conn.execute("SELECT 1 FROM events WHERE id = %s", (args.event,)).fetchone():
             sys.exit(f"No such event: {args.event}")
         res = import_workbook(conn, args.event, args.file, commit=args.commit)
     print(f"sheet:      {res['sheet']}")

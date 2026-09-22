@@ -8,3 +8,41 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.15
+      # Supabase Postgres connection string (session/transaction pooler recommended
+      # for Render — the direct db.<ref>.supabase.co host is IPv6-only and Render's
+      # network may not route it). Set the real value in the Render dashboard.
+      - key: DATABASE_URL
+        sync: false
+      # Document storage (Supabase Storage — private bucket, auto-created on startup).
+      # SUPABASE_URL is https://<project-ref>.supabase.co. SUPABASE_SERVICE_ROLE_KEY
+      # comes from Project Settings -> API -> service_role secret key (NOT anon/public
+      # — this one bypasses Storage RLS, keep it server-side only).
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_STORAGE_BUCKET
+        value: documents
+      # Free-tier Render has no shell access and an ephemeral filesystem, so there's
+      # no way to run `python -m app.cli create-admin` after deploy. Set these once in
+      # the dashboard to auto-create the first admin/event on startup (see
+      # app/main.py's _seed_admin_from_env / _seed_event_from_env — both are no-ops
+      # once an admin/event already exists, so it's safe to leave them set).
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: EVENT_NAME
+        sync: false
+      - key: EVENT_VENUE
+        sync: false
+      - key: EVENT_CITY
+        sync: false
+      - key: EVENT_COUNTRY
+        sync: false
+      - key: EVENT_STARTS
+        sync: false
+      - key: EVENT_ENDS
+        sync: false
+      - key: EVENT_TIMEZONE
+        value: UTC

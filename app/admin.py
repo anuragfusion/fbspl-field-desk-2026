@@ -6,7 +6,6 @@ nothing to maintain. All the offline machinery lives on the floor side only.
 """
 
 import shutil
-import sqlite3
 import tempfile
 from pathlib import Path
 
@@ -24,7 +23,7 @@ router = APIRouter(prefix="/admin", include_in_schema=False)
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
-def admin_page(request: Request, conn: sqlite3.Connection = Depends(get_db)):
+def admin_page(request: Request, conn = Depends(get_db)):
     """Like require_admin, but sends a browser to the login page instead of
     handing it a JSON 401 it cannot do anything with."""
     token = request.cookies.get(A.COOKIE_NAME)
@@ -51,7 +50,7 @@ def login_page(request: Request, error: str = ""):
 
 @router.post("/login")
 def login_submit(request: Request, username: str = Form(...), password: str = Form(...),
-                 conn: sqlite3.Connection = Depends(get_db)):
+                 conn = Depends(get_db)):
     try:
         user = A.authenticate(conn, username, password,
                               request.client.host if request.client else "")
@@ -74,7 +73,7 @@ def login_submit(request: Request, username: str = Form(...), password: str = Fo
 
 
 @router.get("/logout")
-def logout(request: Request, conn: sqlite3.Connection = Depends(get_db)):
+def logout(request: Request, conn = Depends(get_db)):
     token = request.cookies.get(A.COOKIE_NAME)
     if token:
         A.revoke_session_by_token(conn, token)
@@ -87,10 +86,10 @@ def logout(request: Request, conn: sqlite3.Connection = Depends(get_db)):
 
 @router.get("")
 def dashboard(request: Request, msg: str = "", kind: str = "ok",
-              user=Depends(admin_page), conn: sqlite3.Connection = Depends(get_db)):
+              user=Depends(admin_page), conn = Depends(get_db)):
     event = conn.execute(
         "SELECT e.* FROM events e JOIN event_members m ON m.event_id = e.id"
-        " WHERE m.user_id = ? AND e.archived_at IS NULL ORDER BY e.starts_on LIMIT 1",
+        " WHERE m.user_id = %s AND e.archived_at IS NULL ORDER BY e.starts_on LIMIT 1",
         (user["id"],)).fetchone()
 
     ctx = {"user": user, "event": event, "msg": msg, "kind": kind,
@@ -100,23 +99,23 @@ def dashboard(request: Request, msg: str = "", kind: str = "ok",
     if event:
         e = event["id"]
         ctx["clients"] = conn.execute(
-            "SELECT id, name, priority, owner FROM clients WHERE event_id = ?"
+            "SELECT id, name, priority, owner FROM clients WHERE event_id = %s"
             " ORDER BY name", (e,)).fetchall()
         ctx["updates"] = conn.execute(
             "SELECT u.*, (SELECT COUNT(*) FROM update_receipts r WHERE r.update_id = u.id"
-            " AND r.done_at IS NOT NULL) AS done_count FROM updates u WHERE u.event_id = ?"
+            " AND r.done_at IS NOT NULL) AS done_count FROM updates u WHERE u.event_id = %s"
             " ORDER BY u.pinned DESC, u.created_at DESC", (e,)).fetchall()
         ctx["documents"] = conn.execute(
             "SELECT d.*, c.name AS client_name FROM documents d"
-            " LEFT JOIN clients c ON c.id = d.client_id WHERE d.event_id = ?"
+            " LEFT JOIN clients c ON c.id = d.client_id WHERE d.event_id = %s"
             " ORDER BY d.created_at DESC", (e,)).fetchall()
         ctx["leads"] = conn.execute(
             "SELECT l.*, u.full_name AS by_name, c.name AS client_name FROM leads l"
             " LEFT JOIN users u ON u.id = l.captured_by"
             " LEFT JOIN clients c ON c.id = l.client_id"
-            " WHERE l.event_id = ? ORDER BY l.captured_at DESC LIMIT 100", (e,)).fetchall()
+            " WHERE l.event_id = %s ORDER BY l.captured_at DESC LIMIT 100", (e,)).fetchall()
         ctx["members"] = {r["user_id"] for r in conn.execute(
-            "SELECT user_id FROM event_members WHERE event_id = ?", (e,))}
+            "SELECT user_id FROM event_members WHERE event_id = %s", (e,))}
     return templates.TemplateResponse(request=request, name="admin.html", context=ctx)
 
 
@@ -125,22 +124,22 @@ def dashboard(request: Request, msg: str = "", kind: str = "ok",
 @router.post("/users/new")
 def create_user(request: Request, username: str = Form(...), full_name: str = Form(""),
                 role: str = Form("field"), password: str = Form(...), event_id: str = Form(""),
-                user=Depends(admin_page), conn: sqlite3.Connection = Depends(get_db)):
+                user=Depends(admin_page), conn = Depends(get_db)):
     if len(password) < 8:
         return back("Password must be at least 8 characters", "err")
-    if conn.execute("SELECT 1 FROM users WHERE username = ? COLLATE NOCASE",
+    if conn.execute("SELECT 1 FROM users WHERE username = %s",
                     (username.strip(),)).fetchone():
         return back(f"Username {username} is already taken", "err")     # §12.2 -> 409 equivalent
 
     uid = new_id()
     conn.execute(
         "INSERT INTO users (id, username, full_name, role, password_hash, must_change_password,"
-        " created_by, created_at, updated_at) VALUES (?,?,?,?,?,1,?,?,?)",
+        " created_by, created_at, updated_at) VALUES (%s,%s,%s,%s,%s,TRUE,%s,%s,%s)",
         (uid, username.strip(), full_name.strip() or username.strip(), role,
          A.hash_password(password), user["id"], now_iso(), now_iso()))
     if event_id:
-        conn.execute("INSERT OR IGNORE INTO event_members (id, event_id, user_id, event_role,"
-                     " added_at) VALUES (?,?,?,?,?)",
+        conn.execute("INSERT INTO event_members (id, event_id, user_id, event_role,"
+                     " added_at) VALUES (%s,%s,%s,%s,%s) ON CONFLICT (event_id, user_id) DO NOTHING",
                      (new_id(), event_id, uid, "attendee", now_iso()))
     audit(conn, user["id"], "user.create", "user", uid, {"username": username, "role": role})
     return back(f"Created {username} — send them the password over Teams, not in the pack")
@@ -148,15 +147,15 @@ def create_user(request: Request, username: str = Form(...), full_name: str = Fo
 
 @router.post("/users/{uid}/password")
 def reset_password(uid: str, password: str = Form(...), user=Depends(admin_page),
-                   conn: sqlite3.Connection = Depends(get_db)):
+                   conn = Depends(get_db)):
     if len(password) < 8:
         return back("Password must be at least 8 characters", "err")
-    row = conn.execute("SELECT username FROM users WHERE id = ?", (uid,)).fetchone()
+    row = conn.execute("SELECT username FROM users WHERE id = %s", (uid,)).fetchone()
     if row is None:
         return back("No such user", "err")
     conn.execute(
-        "UPDATE users SET password_hash = ?, must_change_password = 1, failed_attempts = 0,"
-        " last_failed_at = NULL, locked_until = NULL, updated_at = ? WHERE id = ?",
+        "UPDATE users SET password_hash = %s, must_change_password = TRUE, failed_attempts = 0,"
+        " last_failed_at = NULL, locked_until = NULL, updated_at = %s WHERE id = %s",
         (A.hash_password(password), now_iso(), uid))
     n = A.revoke_all_sessions(conn, uid)          # §12.2
     audit(conn, user["id"], "user.reset_password", "user", uid, {"sessions_revoked": n})
@@ -165,8 +164,8 @@ def reset_password(uid: str, password: str = Form(...), user=Depends(admin_page)
 
 @router.post("/users/{uid}/toggle")
 def toggle_user(uid: str, user=Depends(admin_page),
-                conn: sqlite3.Connection = Depends(get_db)):
-    row = conn.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
+                conn = Depends(get_db)):
+    row = conn.execute("SELECT * FROM users WHERE id = %s", (uid,)).fetchone()
     if row is None:
         return back("No such user", "err")
     if uid == user["id"]:
@@ -177,7 +176,7 @@ def toggle_user(uid: str, user=Depends(admin_page),
         if live < 2:
             return back("At least one enabled admin must remain", "err")  # §12.2
     now = None if row["disabled_at"] else now_iso()
-    conn.execute("UPDATE users SET disabled_at = ?, updated_at = ? WHERE id = ?",
+    conn.execute("UPDATE users SET disabled_at = %s, updated_at = %s WHERE id = %s",
                  (now, now_iso(), uid))
     if now:
         A.revoke_all_sessions(conn, uid)
@@ -191,28 +190,31 @@ def toggle_user(uid: str, user=Depends(admin_page),
 def post_update(event_id: str = Form(...), title: str = Form(...), body: str = Form(""),
                 level: str = Form("info"), pinned: str = Form(""), is_action: str = Form(""),
                 client_id: str = Form(""), user=Depends(admin_page),
-                conn: sqlite3.Connection = Depends(get_db)):
+                conn = Depends(get_db)):
     if not title.strip():
         return back("An update needs a headline", "err")
     version = bump_version(conn, event_id)
     conn.execute(
         "INSERT INTO updates (id, event_id, client_id, title, body, level, pinned, is_action,"
-        " author_id, version, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        " author_id, version, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
         (new_id(), event_id, client_id or None, title.strip(), body.strip(), level,
-         1 if pinned else 0, 1 if is_action else 0, user["id"], version, now_iso()))
+         bool(pinned), bool(is_action), user["id"], version, now_iso()))
     return back("Posted — it reaches devices on their next sync")
 
 
 @router.post("/updates/{update_id}/delete")
 def delete_update(update_id: str, user=Depends(admin_page),
-                  conn: sqlite3.Connection = Depends(get_db)):
-    row = conn.execute("SELECT event_id FROM updates WHERE id = ?", (update_id,)).fetchone()
+                  conn = Depends(get_db)):
+    row = conn.execute("SELECT event_id FROM updates WHERE id = %s", (update_id,)).fetchone()
     if row is None:
         return back("No such update", "err")
     version = bump_version(conn, row["event_id"])
-    conn.execute("DELETE FROM updates WHERE id = ?", (update_id,))
-    conn.execute("INSERT OR REPLACE INTO deleted_rows (entity, entity_id, event_id, version)"
-                 " VALUES (?,?,?,?)", ("update", update_id, row["event_id"], version))
+    conn.execute("DELETE FROM updates WHERE id = %s", (update_id,))
+    conn.execute(
+        "INSERT INTO deleted_rows (entity, entity_id, event_id, version) VALUES (%s,%s,%s,%s)"
+        " ON CONFLICT (entity, entity_id) DO UPDATE SET"
+        " event_id = excluded.event_id, version = excluded.version",
+        ("update", update_id, row["event_id"], version))
     return back("Update removed")
 
 
@@ -221,7 +223,7 @@ def delete_update(update_id: str, user=Depends(admin_page),
 @router.post("/documents")
 async def upload(event_id: str = Form(...), client_id: str = Form(""), note: str = Form(""),
                  file: UploadFile = File(...), user=Depends(admin_page),
-                 conn: sqlite3.Connection = Depends(get_db)):
+                 conn = Depends(get_db)):
     data = await file.read()
     try:
         mime = storage.sniff(data, file.filename or "upload")
@@ -232,7 +234,7 @@ async def upload(event_id: str = Form(...), client_id: str = Form(""), note: str
     conn.execute(
         "INSERT INTO documents (id, event_id, client_id, filename, mime_type, size_bytes,"
         " checksum_sha256, storage_key, note, uploaded_by, version, created_at)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
         (new_id(), event_id, client_id or None, file.filename, mime, size, digest, digest,
          note, user["id"], version, now_iso()))
     return back(f"Uploaded {file.filename} ({size // 1024} KB)")
@@ -240,15 +242,18 @@ async def upload(event_id: str = Form(...), client_id: str = Form(""), note: str
 
 @router.post("/documents/{doc_id}/delete")
 def remove_document(doc_id: str, user=Depends(admin_page),
-                    conn: sqlite3.Connection = Depends(get_db)):
-    row = conn.execute("SELECT event_id, filename FROM documents WHERE id = ?",
+                    conn = Depends(get_db)):
+    row = conn.execute("SELECT event_id, filename FROM documents WHERE id = %s",
                        (doc_id,)).fetchone()
     if row is None:
         return back("No such document", "err")
     version = bump_version(conn, row["event_id"])
-    conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
-    conn.execute("INSERT OR REPLACE INTO deleted_rows (entity, entity_id, event_id, version)"
-                 " VALUES (?,?,?,?)", ("document", doc_id, row["event_id"], version))
+    conn.execute("DELETE FROM documents WHERE id = %s", (doc_id,))
+    conn.execute(
+        "INSERT INTO deleted_rows (entity, entity_id, event_id, version) VALUES (%s,%s,%s,%s)"
+        " ON CONFLICT (entity, entity_id) DO UPDATE SET"
+        " event_id = excluded.event_id, version = excluded.version",
+        ("document", doc_id, row["event_id"], version))
     audit(conn, user["id"], "document.delete", "document", doc_id, {})
     return back(f"Removed {row['filename']} — devices drop it on next sync")
 
@@ -258,7 +263,7 @@ def remove_document(doc_id: str, user=Depends(admin_page),
 @router.post("/import")
 async def workbook(request: Request, event_id: str = Form(...), commit: str = Form(""),
                    file: UploadFile = File(...), user=Depends(admin_page),
-                   conn: sqlite3.Connection = Depends(get_db)):
+                   conn = Depends(get_db)):
     """Preview first, always. An import that silently rewrites 300 client briefs
     the night before an event is a bad afternoon."""
     suffix = Path(file.filename or "book.xlsx").suffix or ".xlsx"
@@ -287,7 +292,7 @@ async def workbook(request: Request, event_id: str = Form(...), commit: str = Fo
 
 @router.post("/export-pack")
 def export_pack(event_id: str = Form(...), user=Depends(admin_page),
-                conn: sqlite3.Connection = Depends(get_db)):
+                conn = Depends(get_db)):
     pack, creds = build_pack(conn, event_id, packed_by=user["full_name"])
     listing = " · ".join(f"{c['username']}: {c['temporary_password']}" for c in creds)
     return back(f"Pack ready — {len(pack['clients'])} clients, {len(pack['files'])} files. "

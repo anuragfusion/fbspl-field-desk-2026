@@ -7,7 +7,6 @@ would buy nothing here and cost a subsystem.
 
 import hashlib
 import secrets
-import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from argon2 import PasswordHasher
@@ -73,7 +72,7 @@ def create_session(conn, user_id: str, remember: bool, user_agent: str = "",
     expires_at = expires.replace(microsecond=0).isoformat().replace("+00:00", "Z")
     conn.execute(
         "INSERT INTO sessions (id, user_id, token_hash, device_label, user_agent,"
-        " issued_at, expires_at) VALUES (?,?,?,?,?,?,?)",
+        " issued_at, expires_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
         (new_id(), user_id, _token_hash(token), device_label, user_agent[:300],
          now_iso(), expires_at),
     )
@@ -81,17 +80,17 @@ def create_session(conn, user_id: str, remember: bool, user_agent: str = "",
 
 
 def revoke_session_by_token(conn, token: str) -> None:
-    conn.execute("UPDATE sessions SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL",
+    conn.execute("UPDATE sessions SET revoked_at = %s WHERE token_hash = %s AND revoked_at IS NULL",
                  (now_iso(), _token_hash(token)))
 
 
 def revoke_all_sessions(conn, user_id: str, except_token: str | None = None) -> int:
     """§12.2: an admin password reset revokes the user's sessions; changing your own
     password signs you out everywhere else but keeps the current device."""
-    sql = "UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL"
+    sql = "UPDATE sessions SET revoked_at = %s WHERE user_id = %s AND revoked_at IS NULL"
     params: list = [now_iso(), user_id]
     if except_token:
-        sql += " AND token_hash != ?"
+        sql += " AND token_hash != %s"
         params.append(_token_hash(except_token))
     return conn.execute(sql, params).rowcount
 
@@ -103,7 +102,7 @@ def session_user(conn, token: str | None):
         return None
     row = conn.execute(
         "SELECT u.*, s.token_hash AS _tok FROM sessions s JOIN users u ON u.id = s.user_id"
-        " WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ?",
+        " WHERE s.token_hash = %s AND s.revoked_at IS NULL AND s.expires_at > %s",
         (_token_hash(token), now_iso()),
     ).fetchone()
     if row is None or row["disabled_at"]:
@@ -116,8 +115,8 @@ def session_user(conn, token: str | None):
 def authenticate(conn, username: str, password: str, ip: str = ""):
     """Raises ApiError on any failure. Returns the user row on success."""
     row = conn.execute(
-        "SELECT * FROM users WHERE username = ? COLLATE NOCASE"
-        " OR (email IS NOT NULL AND email = ? COLLATE NOCASE)",
+        "SELECT * FROM users WHERE username = %s"
+        " OR (email IS NOT NULL AND email = %s)",
         (username.strip(), username.strip()),
     ).fetchone()
 
@@ -149,8 +148,8 @@ def authenticate(conn, username: str, password: str, ip: str = ""):
         lock = (_utcnow() + LOCKOUT_DURATION).replace(microsecond=0).isoformat().replace(
             "+00:00", "Z") if attempts >= LOCKOUT_THRESHOLD else None
         conn.execute(
-            "UPDATE users SET failed_attempts = ?, last_failed_at = ?, locked_until = ?"
-            " WHERE id = ?", (attempts, now_iso(), lock, row["id"]))
+            "UPDATE users SET failed_attempts = %s, last_failed_at = %s, locked_until = %s"
+            " WHERE id = %s", (attempts, now_iso(), lock, row["id"]))
         audit(conn, None, "login.failed", "user", row["id"], {"attempts": attempts}, ip)
         # The failure counter and its audit row are their own unit of work. The request
         # is about to fail, and the request-scoped connection rolls back on exception —
@@ -160,7 +159,7 @@ def authenticate(conn, username: str, password: str, ip: str = ""):
 
     conn.execute(
         "UPDATE users SET failed_attempts = 0, last_failed_at = NULL, locked_until = NULL,"
-        " last_login_at = ? WHERE id = ?", (now_iso(), row["id"]))
+        " last_login_at = %s WHERE id = %s", (now_iso(), row["id"]))
     return row
 
 
@@ -174,7 +173,7 @@ def _token_from(cookie: str | None, authorization: str | None) -> str | None:
 
 def current_user(
     request: Request,
-    conn: sqlite3.Connection = Depends(get_db),
+    conn = Depends(get_db),
     fd_session: str | None = Cookie(default=None, alias=COOKIE_NAME),
     authorization: str | None = Header(default=None),
 ):

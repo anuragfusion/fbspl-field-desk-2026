@@ -5,3 +5,6 @@ jinja2
 python-multipart
 openpyxl
 argon2-cffi
+psycopg2-binary
+python-dotenv
+httpx

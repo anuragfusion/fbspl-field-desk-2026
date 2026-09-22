@@ -11,8 +11,7 @@ from datetime import date
 from pathlib import Path
 
 _TMP = tempfile.mkdtemp(prefix="fielddesk-imp-")
-os.environ["FIELDDESK_DB"] = str(Path(_TMP) / "imp.db")
-os.environ["FIELDDESK_STORAGE"] = str(Path(_TMP) / "storage")
+os.environ.setdefault("DATABASE_URL", "postgresql://postgres:postgres@localhost:5433/postgres")
 
 from openpyxl import Workbook                                          # noqa: E402
 
@@ -259,7 +258,7 @@ class CommitTests(unittest.TestCase):
             conn.execute("DELETE FROM client_pocs")
             conn.execute("DELETE FROM clients")
             conn.execute("DELETE FROM events")
-            conn.execute("INSERT INTO events (id, name) VALUES (?,?)",
+            conn.execute("INSERT INTO events (id, name) VALUES (%s,%s)",
                          (self.event_id, "Applied Net 2026"))
 
     def test_preview_writes_nothing(self):
@@ -288,7 +287,7 @@ class CommitTests(unittest.TestCase):
     def test_changed_row_is_detected_as_an_update_and_bumps_the_version(self):
         with db() as conn:
             import_workbook(conn, self.event_id, self.path, commit=True)
-            v1 = conn.execute("SELECT version FROM events WHERE id=?",
+            v1 = conn.execute("SELECT version FROM events WHERE id=%s",
                               (self.event_id,)).fetchone()["version"]
 
         changed = list(MERIDIAN)
@@ -297,9 +296,9 @@ class CommitTests(unittest.TestCase):
 
         with db() as conn:
             res = import_workbook(conn, self.event_id, self.path, commit=True)
-            v2 = conn.execute("SELECT version FROM events WHERE id=?",
+            v2 = conn.execute("SELECT version FROM events WHERE id=%s",
                               (self.event_id,)).fetchone()["version"]
-            row = conn.execute("SELECT summary FROM clients WHERE name=?",
+            row = conn.execute("SELECT summary FROM clients WHERE name=%s",
                                ("Meridian Insurance Group",)).fetchone()
         self.assertEqual(res["updated"], 1)
         self.assertEqual(res["unchanged"], 2)

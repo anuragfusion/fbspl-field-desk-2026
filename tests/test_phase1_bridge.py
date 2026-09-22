@@ -12,8 +12,7 @@ import unittest
 from pathlib import Path
 
 _TMP = tempfile.mkdtemp(prefix="fielddesk-p1-")
-os.environ["FIELDDESK_DB"] = str(Path(_TMP) / "p1.db")
-os.environ["FIELDDESK_STORAGE"] = str(Path(_TMP) / "storage")
+os.environ.setdefault("DATABASE_URL", "postgresql://postgres:postgres@localhost:5433/postgres")
 
 from app import auth as A                                    # noqa: E402
 from app.db import db, init_db, new_id, now_iso              # noqa: E402
@@ -48,49 +47,50 @@ class PackTests(unittest.TestCase):
     def setUp(self):
         init_db()
         with db() as conn:
-            for t in ("client_pocs", "clients", "documents", "meetings", "updates",
-                      "event_members", "events", "users"):
+            for t in ("op_log", "update_receipts", "leads", "client_pocs", "clients",
+                      "documents", "meetings", "updates", "event_members", "events",
+                      "sessions", "audit_log", "users"):
                 conn.execute(f"DELETE FROM {t}")
             self.event_id = new_id()
-            conn.execute("INSERT INTO events (id, name, version) VALUES (?,?,?)",
+            conn.execute("INSERT INTO events (id, name, version) VALUES (%s,%s,%s)",
                          (self.event_id, "Applied Net 2026", 7))
             self.uid = new_id()
             conn.execute("INSERT INTO users (id, username, full_name, role, password_hash,"
-                         " created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+                         " created_at, updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
                          (self.uid, "priya", "Priya Nair", "field",
                           A.hash_password("irrelevant"), now_iso(), now_iso()))
             conn.execute("INSERT INTO event_members (id, event_id, user_id, event_role, added_at)"
-                         " VALUES (?,?,?,?,?)",
+                         " VALUES (%s,%s,%s,%s,%s)",
                          (new_id(), self.event_id, self.uid, "attendee", now_iso()))
 
             self.cid = new_id()
             conn.execute(
                 "INSERT INTO clients (id, event_id, name, priority, owner, account_manager,"
                 " location, product, tags, summary, talking_points, avoid_points, signals,"
-                " created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " created_at, updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (self.cid, self.event_id, "Meridian", "must", "Priya Nair", "R. Shah",
                  "Columbus, OH", "Applied Epic", '["P&C"]', "Renewal signed.",
                  '["Thank Dana"]', '["The March dispute"]', '{"health":"Green"}',
                  now_iso(), now_iso()))
             conn.execute("INSERT INTO client_pocs (id, client_id, event_id, name, title, note,"
-                         " sort_order) VALUES (?,?,?,?,?,?,?)",
+                         " sort_order) VALUES (%s,%s,%s,%s,%s,%s,%s)",
                          (new_id(), self.cid, self.event_id, "Dana Whitfield",
                           "Operations Director", "Decision maker", 0))
             conn.execute(
                 "INSERT INTO meetings (id, event_id, client_id, title, meeting_date, start_time,"
-                " duration_minutes, location, owner, status) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                " duration_minutes, location, owner, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (new_id(), self.event_id, self.cid, "Renewal review", "2026-09-28",
                  "10:30 AM", 30, "FBSPL booth", "Priya Nair", "scheduled"))
             conn.execute(
                 "INSERT INTO updates (id, event_id, title, body, level, pinned, is_action,"
-                " author_id, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                (new_id(), self.event_id, "Pricing approved", "Go ahead.", "urgent", 1, 1,
+                " author_id, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (new_id(), self.event_id, "Pricing approved", "Go ahead.", "urgent", True, True,
                  self.uid, now_iso()))
             digest, size = put_bytes(PDF)
             conn.execute(
                 "INSERT INTO documents (id, event_id, client_id, filename, mime_type, size_bytes,"
                 " checksum_sha256, storage_key, uploaded_by, created_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (new_id(), self.event_id, self.cid, "brief.pdf", "application/pdf", size,
                  digest, digest, self.uid, now_iso()))
 
@@ -157,7 +157,7 @@ class PackTests(unittest.TestCase):
 
     def test_disabled_users_are_not_exported(self):
         with db() as conn:
-            conn.execute("UPDATE users SET disabled_at = ? WHERE id = ?", (now_iso(), self.uid))
+            conn.execute("UPDATE users SET disabled_at = %s WHERE id = %s", (now_iso(), self.uid))
             pack, creds = build_pack(conn, self.event_id)
         self.assertEqual(pack["users"], [])
         self.assertEqual(creds, [])

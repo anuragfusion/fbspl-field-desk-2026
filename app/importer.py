@@ -501,7 +501,7 @@ def unmapped_columns(rows: list[list]) -> list[str]:
 def plan_import(conn, event_id: str, clients: list[dict]) -> dict:
     """Dry run. Returns the counts an admin confirms before anything is written."""
     existing = {r["name"].lower(): r for r in conn.execute(
-        "SELECT id, name, source_row_hash FROM clients WHERE event_id = ?", (event_id,))}
+        "SELECT id, name, source_row_hash FROM clients WHERE event_id = %s", (event_id,))}
     new = updated = unchanged = 0
     for c in clients:
         prev = existing.get(c["name"].lower())
@@ -519,7 +519,7 @@ def apply_import(conn, event_id: str, clients: list[dict]) -> dict:
     workbook produces zero updates (§12.4)."""
     version = bump_version(conn, event_id)
     existing = {r["name"].lower(): r for r in conn.execute(
-        "SELECT id, name, source_row_hash FROM clients WHERE event_id = ?", (event_id,))}
+        "SELECT id, name, source_row_hash FROM clients WHERE event_id = %s", (event_id,))}
     counts = {"new": 0, "updated": 0, "unchanged": 0}
 
     for c in clients:
@@ -535,23 +535,23 @@ def apply_import(conn, event_id: str, clients: list[dict]) -> dict:
                   json.dumps(c["signals"], default=str), c["source_row_hash"], version, now_iso())
         if prev:
             conn.execute(
-                "UPDATE clients SET name=?, priority=?, owner=?, account_manager=?, location=?,"
-                " product=?, tags=?, summary=?, talking_points=?, avoid_points=?, signals=?,"
-                " source_row_hash=?, version=?, updated_at=? WHERE id=?", (*fields, cid))
-            conn.execute("DELETE FROM client_pocs WHERE client_id = ?", (cid,))
+                "UPDATE clients SET name=%s, priority=%s, owner=%s, account_manager=%s, location=%s,"
+                " product=%s, tags=%s, summary=%s, talking_points=%s, avoid_points=%s, signals=%s,"
+                " source_row_hash=%s, version=%s, updated_at=%s WHERE id=%s", (*fields, cid))
+            conn.execute("DELETE FROM client_pocs WHERE client_id = %s", (cid,))
             counts["updated"] += 1
         else:
             conn.execute(
                 "INSERT INTO clients (name, priority, owner, account_manager, location, product,"
                 " tags, summary, talking_points, avoid_points, signals, source_row_hash, version,"
-                " updated_at, id, event_id, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " updated_at, id, event_id, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (*fields, cid, event_id, now_iso()))
             counts["new"] += 1
 
         for i, p in enumerate(c["pocs"]):
             conn.execute(
                 "INSERT INTO client_pocs (id, client_id, event_id, name, title, note,"
-                " sort_order, version) VALUES (?,?,?,?,?,?,?,?)",
+                " sort_order, version) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
                 (new_id(), cid, event_id, p["name"], p["title"], p["note"], i, version))
 
     counts["version"] = version

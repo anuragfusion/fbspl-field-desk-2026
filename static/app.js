@@ -297,6 +297,7 @@ function renderFeed() {
   }).join('') : '<div class="empty"><b>No updates from the office yet</b>Anything urgent will appear here.</div>';
 }
 
+/* Schedule tab disabled
 function renderSchedule() {
   const byDay = {};
   for (const m of S.meetings) (byDay[m.meeting_date || 'Unscheduled'] ??= []).push(m);
@@ -320,6 +321,7 @@ function renderSchedule() {
       }).join('')}</div>`).join('')
     : '<div class="empty"><b>Nothing scheduled yet</b>Meetings appear here once the office publishes them.</div>';
 }
+*/
 
 async function renderDocs() {
   const st = await docsmod.status();
@@ -363,13 +365,13 @@ function renderAll() {
   populateClientFilterOptions();
   $('pClients').textContent = S.clients.length;
   $('pDocs').textContent = S.documents.length;
-  $('pSched').textContent = S.meetings.length;
+  // $('pSched').textContent = S.meetings.length; // Schedule tab disabled
   $('pLeads').textContent = S.leads.length;
   const open = S.updates.filter((u) => u.is_action
     && !(S.receipts.find((r) => r.update_id === u.id) || {}).done_at).length;
   $('pBrief').textContent = open || S.updates.length;
   $('pBrief').className = `pill${open ? ' urgent' : ''}`;
-  renderFeed(); renderClients(); renderSchedule(); renderLeads(); renderDocs();
+  renderFeed(); renderClients(); renderLeads(); renderDocs(); // renderSchedule() disabled
 }
 
 /* --- lead capture (offline-first) ---------------------------------------- */
@@ -519,17 +521,22 @@ function bind() {
 
   $('addLead').onclick = () => logLead(null);
   $('signOut').onclick = signOut;
-  $('btnSync').onclick = async () => {
-    toast('Syncing…');
-    const r = await sync.sync(S.session.event.id, { reason: 'manual' });
-    if (r && r.error) toast(`Sync failed: ${r.error}`, 'err');
-  };
   $('btnPrepare').onclick = async () => {
+    toast('Syncing…');
+    const sr = await sync.sync(S.session.event.id, { reason: 'manual' });
+    if (sr && sr.error) toast(`Sync failed: ${sr.error} — still preparing documents…`, 'err');
+
     toast('Downloading documents…');
-    const r = await docsmod.prefetchAll();
+    const dr = await docsmod.prefetchAll();
     await renderDocs();
-    toast(r.failed.length ? `${r.failed.length} document(s) failed — retry on better wifi`
-      : formatReadiness(r), r.failed.length ? 'err' : 'ok');
+
+    if (sr && sr.error) {
+      toast(`Sync failed: ${sr.error}`, 'err');
+    } else if (dr.failed.length) {
+      toast(`${dr.failed.length} document(s) failed — retry on better wifi`, 'err');
+    } else {
+      toast(formatReadiness(dr), 'ok');
+    }
   };
 
   document.body.addEventListener('click', (e) => {

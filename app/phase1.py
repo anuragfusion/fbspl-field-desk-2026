@@ -17,7 +17,8 @@ import base64
 import json
 import secrets
 
-from .storage import open_path
+from .db import now_iso
+from .storage import StorageNotConfigured, get_bytes
 
 WORDS = ["harbor", "meridian", "cascade", "summit", "anchor", "beacon", "quarry", "juniper"]
 
@@ -63,8 +64,12 @@ def temp_password() -> str:
 
 
 def _jsonl(value, default):
+    if not value:
+        return default
+    if not isinstance(value, str):
+        return value          # jsonb columns come back already parsed (dict/list)
     try:
-        return json.loads(value) if value else default
+        return json.loads(value)
     except (TypeError, ValueError):
         return default
 
@@ -73,7 +78,7 @@ def build_pack(conn, event_id: str, packed_by: str = "", include_files: bool = T
     """Returns (pack, credentials). `credentials` is the plaintext list the admin
     must distribute — it is deliberately NOT inside the pack file, because the
     pack gets shared in a Teams channel."""
-    ev = conn.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
+    ev = conn.execute("SELECT * FROM events WHERE id = %s", (event_id,)).fetchone()
     if ev is None:
         raise LookupError(event_id)
 
@@ -81,7 +86,7 @@ def build_pack(conn, event_id: str, packed_by: str = "", include_files: bool = T
     users = []
     for u in conn.execute(
         "SELECT u.* FROM users u JOIN event_members m ON m.user_id = u.id"
-        " WHERE m.event_id = ? AND u.disabled_at IS NULL", (event_id,)
+        " WHERE m.event_id = %s AND u.disabled_at IS NULL", (event_id,)
     ):
         pw = temp_password()
         credentials.append({"username": u["username"], "name": u["full_name"],
@@ -94,7 +99,7 @@ def build_pack(conn, event_id: str, packed_by: str = "", include_files: bool = T
 
     pocs_by_client: dict[str, list] = {}
     for p in conn.execute(
-        "SELECT * FROM client_pocs WHERE event_id = ? ORDER BY sort_order", (event_id,)
+        "SELECT * FROM client_pocs WHERE event_id = %s ORDER BY sort_order", (event_id,)
     ):
         pocs_by_client.setdefault(p["client_id"], []).append(
             {"name": p["name"] or "", "title": p["title"] or "", "note": p["note"] or ""})
@@ -108,7 +113,7 @@ def build_pack(conn, event_id: str, packed_by: str = "", include_files: bool = T
         "avoid": _jsonl(c["avoid_points"], []),
         "pocs": pocs_by_client.get(c["id"], []),
         "sig": _jsonl(c["signals"], {}),
-    } for c in conn.execute("SELECT * FROM clients WHERE event_id = ?", (event_id,))]
+    } for c in conn.execute("SELECT * FROM clients WHERE event_id = %s", (event_id,))]
 
     meetings = [{
         "id": m["id"], "date": m["meeting_date"] or "", "time": m["start_time"] or "",
@@ -117,7 +122,7 @@ def build_pack(conn, event_id: str, packed_by: str = "", include_files: bool = T
         "owner": m["owner"] or "", "attendees": m["attendees"] or "",
         "status": "planned" if m["status"] == "scheduled" else (m["status"] or "planned"),
         "notes": m["notes"] or "",
-    } for m in conn.execute("SELECT * FROM meetings WHERE event_id = ?", (event_id,))]
+    } for m in conn.execute("SELECT * FROM meetings WHERE event_id = %s", (event_id,))]
 
     authors = {u["id"]: u["full_name"] for u in conn.execute("SELECT id, full_name FROM users")}
     updates = [{
@@ -125,23 +130,23 @@ def build_pack(conn, event_id: str, packed_by: str = "", include_files: bool = T
         "pinned": bool(u["pinned"]), "action": bool(u["is_action"]), "doneAt": None,
         "clientId": u["client_id"], "author": authors.get(u["author_id"], "Office"),
         "ts": u["created_at"],
-    } for u in conn.execute("SELECT * FROM updates WHERE event_id = ?", (event_id,))]
+    } for u in conn.execute("SELECT * FROM updates WHERE event_id = %s", (event_id,))]
 
     docs, files = [], []
-    for d in conn.execute("SELECT * FROM documents WHERE event_id = ?", (event_id,)):
+    for d in conn.execute("SELECT * FROM documents WHERE event_id = %s", (event_id,)):
         docs.append({"id": d["id"], "name": d["filename"], "type": d["mime_type"],
                      "size": d["size_bytes"], "clientId": d["client_id"],
                      "note": d["note"] or "", "added": d["created_at"]})
         if include_files:
             try:
-                raw = open_path(d["storage_key"]).read_bytes()
+                raw = get_bytes(d["storage_key"])
                 files.append({"id": d["id"], "b64": base64.b64encode(raw).decode()})
-            except FileNotFoundError:
+            except (FileNotFoundError, StorageNotConfigured):
                 pass          # metadata still travels; the file is simply absent
 
     pack = {
         "kind": "fbspl-an26-briefing-pack", "v": 1,
-        "exported": conn.execute("SELECT datetime('now')").fetchone()[0] + "Z",
+        "exported": now_iso(),
         "packVersion": ev["version"], "packUpdated": None, "packBy": packed_by,
         "users": users, "clients": clients, "docs": docs,
         "meetings": meetings, "updates": updates, "files": files,

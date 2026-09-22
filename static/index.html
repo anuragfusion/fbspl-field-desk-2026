@@ -72,15 +72,14 @@
   <span id="syncPending" class="hide"></span>
   <span style="flex:1"></span>
   <span class="badge mute" id="readiness">—</span>
-  <button class="btn sub tiny" id="btnPrepare">Prepare for offline</button>
-  <button class="btn sub tiny" id="btnSync">Sync now</button>
+  <button class="btn sub tiny" id="btnPrepare">Sync &amp; prepare offline</button>
 </div>
 
 <nav class="tabs" id="tabs" role="tablist">
   <button role="tab" aria-selected="true" data-p="brief">Brief <span class="pill" id="pBrief">0</span></button>
   <button role="tab" aria-selected="false" data-p="clients">Clients <span class="pill" id="pClients">0</span></button>
   <button role="tab" aria-selected="false" data-p="docs">Documents <span class="pill" id="pDocs">0</span></button>
-  <button role="tab" aria-selected="false" data-p="sched">Schedule <span class="pill" id="pSched">0</span></button>
+  <!-- Schedule tab disabled — see p-sched panel below for reinstating -->
   <button role="tab" aria-selected="false" data-p="leads">Leads <span class="pill" id="pLeads">0</span></button>
 </nav>
 
@@ -133,11 +132,13 @@
     <div class="dlist" id="docList"></div>
   </section>
 
+  <!-- Schedule tab disabled
   <section class="panel" id="p-sched" role="tabpanel">
     <div class="sec-h"><div><h2>Meeting schedule</h2>
       <div class="sub">Sept 28 – Oct 1, 2026 · Gaylord National</div></div></div>
     <div id="schedList"></div>
   </section>
+  -->
 
   <section class="panel" id="p-leads" role="tabpanel">
     <div class="sec-h">

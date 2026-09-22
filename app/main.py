@@ -1,14 +1,13 @@
 """FBSPL Field Desk — FastAPI app."""
 
 import os
-import sqlite3
 
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import admin, api
+from . import admin, api, storage
 from . import auth as A
 from .db import BASE_DIR, audit, db, new_id, get_db, init_db, now_iso
 
@@ -31,9 +30,9 @@ def _seed_admin_from_env() -> None:
         uid = new_id()
         conn.execute(
             "INSERT INTO users (id, username, full_name, role, password_hash,"
-            " must_change_password, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+            " must_change_password, created_at, updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
             (uid, username, username, "admin", A.hash_password(password),
-             0, now_iso(), now_iso()))
+             False, now_iso(), now_iso()))
         audit(conn, None, "user.create", "user", uid, {"username": username, "role": "admin"})
 
 
@@ -50,14 +49,14 @@ def _seed_event_from_env() -> None:
         eid = new_id()
         conn.execute(
             "INSERT INTO events (id, name, venue, city, country, starts_on, ends_on, timezone)"
-            " VALUES (?,?,?,?,?,?,?,?)",
+            " VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
             (eid, name, os.environ.get("EVENT_VENUE", ""), os.environ.get("EVENT_CITY", ""),
              os.environ.get("EVENT_COUNTRY", ""), os.environ.get("EVENT_STARTS", ""),
              os.environ.get("EVENT_ENDS", ""), os.environ.get("EVENT_TIMEZONE", "UTC")))
         for u in conn.execute("SELECT id FROM users WHERE role='admin'").fetchall():
             conn.execute(
                 "INSERT INTO event_members (id, event_id, user_id, event_role, added_at)"
-                " VALUES (?,?,?,?,?)", (new_id(), eid, u["id"], "organiser", now_iso()))
+                " VALUES (%s,%s,%s,%s,%s)", (new_id(), eid, u["id"], "organiser", now_iso()))
         audit(conn, None, "event.create", "event", eid, {"name": name})
 
 
@@ -66,6 +65,12 @@ def _startup() -> None:
     init_db()
     _seed_admin_from_env()
     _seed_event_from_env()
+    try:
+        storage.ensure_bucket()
+    except storage.StorageNotConfigured:
+        # Document upload/download will 500 until these are set, but the rest of
+        # the app (sync, leads, admin) doesn't depend on them — don't block boot.
+        pass
 
 
 @app.exception_handler(A.ApiError)
@@ -102,7 +107,7 @@ class LoginIn(BaseModel):
 
 @app.post("/api/v1/auth/login")
 def login(body: LoginIn, request: Request, response: Response,
-          conn: sqlite3.Connection = Depends(get_db)):
+          conn = Depends(get_db)):
     user = A.authenticate(conn, body.username, body.password, _client_ip(request))
     token, expires_at = A.create_session(
         conn, user["id"], body.remember,
@@ -119,18 +124,18 @@ def login(body: LoginIn, request: Request, response: Response,
 
 @app.post("/api/v1/auth/logout")
 def logout(request: Request, response: Response, user=Depends(A.current_user),
-           conn: sqlite3.Connection = Depends(get_db)):
+           conn = Depends(get_db)):
     A.revoke_session_by_token(conn, request.state.token)
     response.delete_cookie(A.COOKIE_NAME, path="/")
     return {"ok": True}
 
 
 @app.get("/api/v1/auth/me")
-def me(user=Depends(A.current_user), conn: sqlite3.Connection = Depends(get_db)):
+def me(user=Depends(A.current_user), conn = Depends(get_db)):
     events = conn.execute(
         "SELECT e.id, e.name, e.venue, e.starts_on, e.ends_on, e.timezone, e.version,"
         " m.event_role FROM events e JOIN event_members m ON m.event_id = e.id"
-        " WHERE m.user_id = ? AND e.archived_at IS NULL ORDER BY e.starts_on",
+        " WHERE m.user_id = %s AND e.archived_at IS NULL ORDER BY e.starts_on",
         (user["id"],),
     ).fetchall()
     return {
@@ -147,13 +152,13 @@ class ChangePasswordIn(BaseModel):
 
 @app.post("/api/v1/auth/change-password")
 def change_password(body: ChangePasswordIn, request: Request, user=Depends(A.current_user),
-                    conn: sqlite3.Connection = Depends(get_db)):
+                    conn = Depends(get_db)):
     # §10.1: always requires the current password, even for admins.
     if not A.verify_password(user["password_hash"], body.current_password):
         raise A.ApiError(400, "INVALID_CREDENTIALS", "Your current password is incorrect.")
     conn.execute(
-        "UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = ?"
-        " WHERE id = ?", (A.hash_password(body.new_password), now_iso(), user["id"]))
+        "UPDATE users SET password_hash = %s, must_change_password = FALSE, updated_at = %s"
+        " WHERE id = %s", (A.hash_password(body.new_password), now_iso(), user["id"]))
     # §12.2: keeps this device signed in, signs out everywhere else.
     n = A.revoke_all_sessions(conn, user["id"], except_token=request.state.token)
     audit(conn, user["id"], "user.change_password", "user", user["id"],

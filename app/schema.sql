@@ -1,30 +1,36 @@
 -- FBSPL Field Desk — Phase 2 schema (handoff §9)
 -- Written Day 1 and frozen. Mid-week schema churn is expensive.
 --
--- Portability substitutions from the Postgres spec:
---   uuid        -> TEXT holding a UUID string
---   citext      -> TEXT COLLATE NOCASE  (gives §12.2 case-insensitive uniqueness)
---   jsonb       -> TEXT holding JSON
---   text[]      -> TEXT holding a JSON array
---   timestamptz -> TEXT holding ISO-8601 UTC
---   boolean     -> INTEGER 0/1
+-- Targets Postgres/Supabase, via DATABASE_URL. This file used to be ported down to
+-- SQLite substitutions; most of that direction is now reversed:
+--   citext  -> CITEXT   (native case-insensitive uniqueness, §12.2)
+--   jsonb   -> JSONB    (native; psycopg2 round-trips these as dict/list automatically)
+--   boolean -> BOOLEAN  (native)
+-- Two substitutions are kept even on Postgres, deliberately:
+--   uuid        -> TEXT  (ids are opaque strings everywhere in the app — JSON payloads,
+--                          sync cursors, client-generated lead ids — and a real `uuid`
+--                          column would come back from psycopg2 as a uuid.UUID object,
+--                          which isn't directly JSON-serialisable)
+--   timestamptz -> TEXT  (every timestamp in this app is produced by now_iso() as an
+--                          ISO-8601 string and is compared/serialised as a string end to
+--                          end, e.g. exact string equality in tests and in sync payloads;
+--                          a real timestamptz column would come back as a datetime object)
 
-PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
+CREATE EXTENSION IF NOT EXISTS citext;
 
 -- §9.1 -----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS users (
   id                   TEXT PRIMARY KEY,
-  username             TEXT NOT NULL COLLATE NOCASE UNIQUE,
-  email                TEXT COLLATE NOCASE UNIQUE,
+  username             CITEXT NOT NULL UNIQUE,
+  email                CITEXT UNIQUE,
   full_name            TEXT NOT NULL,
   role                 TEXT NOT NULL CHECK (role IN ('admin','field')),
   password_hash        TEXT,                    -- NULL when SSO-only (not used yet)
-  must_change_password INTEGER NOT NULL DEFAULT 0,
-  disabled_at          TEXT,                    -- soft disable, preserves lead attribution
+  must_change_password BOOLEAN NOT NULL DEFAULT FALSE,
+  disabled_at          TEXT,             -- soft disable, preserves lead attribution
   last_login_at        TEXT,
   failed_attempts      INTEGER NOT NULL DEFAULT 0,
-  last_failed_at       TEXT,                    -- so §12.1's "within 15 minutes" is a real window
+  last_failed_at       TEXT,             -- so §12.1's "within 15 minutes" is a real window
   locked_until         TEXT,
   created_by           TEXT REFERENCES users(id),
   created_at           TEXT NOT NULL,
@@ -65,11 +71,11 @@ CREATE TABLE IF NOT EXISTS clients (
   account_manager TEXT,
   location        TEXT,
   product         TEXT,
-  tags            TEXT NOT NULL DEFAULT '[]',    -- JSON array
+  tags            JSONB NOT NULL DEFAULT '[]',   -- JSON array
   summary         TEXT,
-  talking_points  TEXT NOT NULL DEFAULT '[]',    -- JSON array ("say" in Phase 1)
-  avoid_points    TEXT NOT NULL DEFAULT '[]',    -- JSON array ("avoid" in Phase 1)
-  signals         TEXT NOT NULL DEFAULT '{}',    -- JSON object; derived chips
+  talking_points  JSONB NOT NULL DEFAULT '[]',   -- JSON array ("say" in Phase 1)
+  avoid_points    JSONB NOT NULL DEFAULT '[]',   -- JSON array ("avoid" in Phase 1)
+  signals         JSONB NOT NULL DEFAULT '{}',   -- JSON object; derived chips
   source_row_hash TEXT,                          -- idempotent workbook re-import
   version         INTEGER NOT NULL DEFAULT 0,
   created_at      TEXT NOT NULL,
@@ -139,8 +145,8 @@ CREATE TABLE IF NOT EXISTS updates (
   title      TEXT NOT NULL,
   body       TEXT,
   level      TEXT NOT NULL DEFAULT 'info' CHECK (level IN ('info','urgent')),
-  pinned     INTEGER NOT NULL DEFAULT 0,
-  is_action  INTEGER NOT NULL DEFAULT 0,         -- requires acknowledgement
+  pinned     BOOLEAN NOT NULL DEFAULT FALSE,
+  is_action  BOOLEAN NOT NULL DEFAULT FALSE,      -- requires acknowledgement
   author_id  TEXT REFERENCES users(id),
   version    INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
@@ -169,9 +175,9 @@ CREATE TABLE IF NOT EXISTS leads (
   next_step     TEXT,
   notes         TEXT,
   captured_by   TEXT REFERENCES users(id),
-  captured_at   TEXT NOT NULL,                   -- DEVICE time at capture. Never overwritten.
-  synced_at     TEXT NOT NULL,                   -- server receipt
-  clock_skew_ms INTEGER,                         -- surfaced to admin, never auto-corrected
+  captured_at   TEXT NOT NULL,             -- DEVICE time at capture. Never overwritten.
+  synced_at     TEXT NOT NULL,             -- server receipt
+  clock_skew_ms INTEGER,                          -- surfaced to admin, never auto-corrected
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL
 );
@@ -180,12 +186,12 @@ CREATE INDEX IF NOT EXISTS ix_leads_by    ON leads (captured_by);
 
 -- §9.11 ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS audit_log (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  id          BIGSERIAL PRIMARY KEY,
   actor_id    TEXT REFERENCES users(id),
   action      TEXT NOT NULL,                     -- user.create, user.reset_password, login.failed, ...
   entity_type TEXT,
   entity_id   TEXT,
-  detail      TEXT NOT NULL DEFAULT '{}',        -- JSON
+  detail      JSONB NOT NULL DEFAULT '{}',       -- JSON
   ip          TEXT,
   created_at  TEXT NOT NULL
 );

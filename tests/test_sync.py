@@ -10,9 +10,9 @@ import unittest
 from pathlib import Path
 
 _TMP = tempfile.mkdtemp(prefix="fielddesk-sync-")
-os.environ["FIELDDESK_DB"] = str(Path(_TMP) / "sync.db")
-os.environ["FIELDDESK_STORAGE"] = str(Path(_TMP) / "storage")
+os.environ.setdefault("DATABASE_URL", "postgresql://postgres:postgres@localhost:5433/postgres")
 
+import httpx                                                     # noqa: E402
 from fastapi.testclient import TestClient                       # noqa: E402
 
 from app import auth as A                                       # noqa: E402
@@ -35,7 +35,7 @@ class Base(unittest.TestCase):
                       "event_members", "events", "sessions", "audit_log", "users"):
                 conn.execute(f"DELETE FROM {t}")
             self.event_id = new_id()
-            conn.execute("INSERT INTO events (id, name) VALUES (?,?)",
+            conn.execute("INSERT INTO events (id, name) VALUES (%s,%s)",
                          (self.event_id, "Applied Net 2026"))
             self.admin = self._user(conn, "admin", "admin")
             self.priya = self._user(conn, "priya", "field")
@@ -51,12 +51,12 @@ class Base(unittest.TestCase):
     def _user(self, conn, username, role, member=True):
         uid = new_id()
         conn.execute("INSERT INTO users (id, username, full_name, role, password_hash,"
-                     " created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+                     " created_at, updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
                      (uid, username, username.title(), role, A.hash_password("pw-" + username),
                       now_iso(), now_iso()))
         if member:
             conn.execute("INSERT INTO event_members (id, event_id, user_id, event_role, added_at)"
-                         " VALUES (?,?,?,?,?)", (new_id(), self.event_id, uid,
+                         " VALUES (%s,%s,%s,%s,%s)", (new_id(), self.event_id, uid,
                                                  "organiser" if role == "admin" else "attendee",
                                                  now_iso()))
         return uid
@@ -177,7 +177,7 @@ class SyncTests(Base):
             cid = new_id()
             conn.execute(
                 "INSERT INTO clients (id, event_id, name, priority, version, created_at,"
-                " updated_at) VALUES (?,?,?,?,?,?,?)",
+                " updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
                 (cid, self.event_id, name, "must", v, now_iso(), now_iso()))
             return cid, v
 
@@ -205,7 +205,7 @@ class SyncTests(Base):
             v = bump_version(conn, self.event_id)
             conn.execute(
                 "INSERT INTO clients (id, event_id, name, tags, talking_points, signals,"
-                " version, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                " version, created_at, updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (new_id(), self.event_id, "Meridian", '["P&C"]', '["Thank them"]',
                  '{"health":"Green"}', v, now_iso(), now_iso()))
         c = self.client.get(f"/api/v1/events/{self.event_id}/sync?since=0",
@@ -260,11 +260,21 @@ class DocumentTests(Base):
             files={"file": ("brief.pdf", PDF, "application/pdf")}).json()
         self.assertEqual(up["size_bytes"], len(PDF))
 
-        got = self.client.get(f"/api/v1/documents/{up['id']}/content", headers=self.h_priya)
-        self.assertEqual(got.content, PDF)
+        # TestClient's transport routes every request (even to another host) back
+        # into this same app, so it can't actually follow a redirect out to Supabase
+        # — check the redirect itself here, then hit the signed URL for real below.
+        got = self.client.get(f"/api/v1/documents/{up['id']}/content", headers=self.h_priya,
+                              follow_redirects=False)
+        self.assertEqual(got.status_code, 307)
+        signed = got.headers["location"]
+        self.assertIn("supabase.co", signed)
+
+        real = httpx.get(signed)
+        self.assertEqual(real.status_code, 200)
+        self.assertEqual(real.content, PDF)
         # The client compares this against the blob it received before caching it —
         # that check is what stops a captive portal poisoning the document cache.
-        self.assertEqual(got.headers["content-length"], str(len(PDF)))
+        self.assertEqual(real.headers["content-length"], str(len(PDF)))
 
     def test_field_user_cannot_upload(self):
         r = self.client.post(
