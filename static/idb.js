@@ -13,8 +13,18 @@ let _db = null;
 
 export function open() {
   if (_db) return Promise.resolve(_db);
+  return openAt(DB_VERSION).catch((err) => {
+    /* A newer release already upgraded this phone's database and the server was
+     * then rolled back to this code. Every store this code uses is still there,
+     * so open the version on disk rather than locking the user out. */
+    if (err && err.name === 'VersionError') return openAt(undefined);
+    throw err;
+  });
+}
+
+function openAt(version) {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    const req = version === undefined ? indexedDB.open(DB_NAME) : indexedDB.open(DB_NAME, version);
     req.onupgradeneeded = () => {
       const db = req.result;
       for (const name of REPLICA_STORES) {
@@ -33,7 +43,13 @@ export function open() {
         s.createIndex('by_state', 'state');
       }
     };
-    req.onsuccess = () => { _db = req.result; resolve(_db); };
+    req.onsuccess = () => {
+      const db = req.result;
+      /* Step aside when a newer release in another tab needs to upgrade. */
+      db.onversionchange = () => { db.close(); if (_db === db) _db = null; };
+      _db = db;
+      resolve(db);
+    };
     req.onerror = () => reject(req.error);
   });
 }
