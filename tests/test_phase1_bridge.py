@@ -6,10 +6,12 @@ verbatim under Node. To regenerate after any change to the original:
     node tools/phase1_hash.mjs
 """
 
+import hashlib
 import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _TMP = tempfile.mkdtemp(prefix="fielddesk-p1-")
 os.environ.setdefault("DATABASE_URL", "postgresql://postgres:postgres@localhost:5433/postgres")
@@ -17,7 +19,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql://postgres:postgres@localhost:
 from app import auth as A                                    # noqa: E402
 from app.db import db, init_db, new_id, now_iso              # noqa: E402
 from app.phase1 import build_pack, phase1_hash               # noqa: E402
-from app.storage import put_bytes                            # noqa: E402
+from app import phase1                                       # noqa: E402
 
 # (username, password) -> hash, straight out of the original JavaScript.
 GOLDEN = {
@@ -45,6 +47,17 @@ class HashPortTests(unittest.TestCase):
 
 class PackTests(unittest.TestCase):
     def setUp(self):
+        # Storage is in-memory: tests must never reach a real Supabase bucket.
+        self.stored = {}
+
+        def get_bytes(key):
+            if key not in self.stored:
+                raise FileNotFoundError(key)
+            return self.stored[key]
+
+        p = mock.patch.object(phase1, "get_bytes", get_bytes)
+        p.start()
+        self.addCleanup(p.stop)
         init_db()
         with db() as conn:
             for t in ("op_log", "update_receipts", "leads", "client_pocs", "clients",
@@ -86,7 +99,8 @@ class PackTests(unittest.TestCase):
                 " author_id, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (new_id(), self.event_id, "Pricing approved", "Go ahead.", "urgent", True, True,
                  self.uid, now_iso()))
-            digest, size = put_bytes(PDF)
+            digest, size = hashlib.sha256(PDF).hexdigest(), len(PDF)
+            self.stored[digest] = PDF
             conn.execute(
                 "INSERT INTO documents (id, event_id, client_id, filename, mime_type, size_bytes,"
                 " checksum_sha256, storage_key, uploaded_by, created_at)"

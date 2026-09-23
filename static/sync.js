@@ -6,7 +6,9 @@
  */
 
 import * as idb from './idb.js';
-import { applyDelta, validateOutboxReply, validateSync } from './sync_core.js';
+import {
+  REBASE_KEY, applyDelta, eventChanged, rebaseLeads, validateOutboxReply, validateSync,
+} from './sync_core.js';
 
 const TIMEOUT_MS = 15000;
 const BATCH = 100;
@@ -67,18 +69,42 @@ async function pushOutbox(eventId) {
   }
 }
 
-async function pullDelta(eventId) {
+async function pullDelta(eventId, { full = false } = {}) {
   const cursor = await getCursor();
+  const since = full ? 0 : (cursor.version || 0);
   const { parsed, contentType } = await fetchJson(
-    `/api/v1/events/${eventId}/sync?since=${cursor.version || 0}`,
+    `/api/v1/events/${eventId}/sync?since=${since}`,
   );
-  const payload = validateSync(parsed, contentType, cursor.version || 0);
+  const payload = validateSync(parsed, contentType, since);
 
   /* Everything is fetched and validated BEFORE the transaction opens. Nothing
    * inside applyTx awaits — see the note in idb.applyTx. */
   const stats = await idb.applyTx((store) => applyDelta(store, payload));
   emit('pulled', { version: payload.version, ...stats });
   return payload;
+}
+
+/* Runs before the push: leads captured against the old event reference client
+ * ids that no longer exist and would be rejected. The old client names are
+ * saved to meta FIRST, because the full pull below wipes the clients store —
+ * if the phone dies mid-way, the next sync resumes from that marker. */
+async function rebaseIfEventChanged(eventId) {
+  let marker = await idb.get('meta', REBASE_KEY);
+  if (!marker) {
+    if (!eventChanged(await getCursor(), eventId)) return null;
+    const clients = await idb.getAll('clients');
+    marker = { key: REBASE_KEY, client_names: Object.fromEntries(clients.map((c) => [c.id, c.name])) };
+    await idb.put('meta', marker);
+  }
+  if ((await getCursor()).event_id !== eventId) await pullDelta(eventId, { full: true });
+
+  const [leads, outbox, newClients] = await Promise.all([
+    idb.getAll('leads'), idb.getAll('outbox'), idb.getAll('clients'),
+  ]);
+  const plan = rebaseLeads({ leads, outbox, oldClientNames: marker.client_names || {}, newClients });
+  await idb.applyRebase(plan, REBASE_KEY);
+  emit('rebased', { leads: plan.ops.length, unmatched: plan.unmatched });
+  return plan;
 }
 
 /* Single-flight across tabs, for free, via the native Web Locks API. */
@@ -89,6 +115,7 @@ export async function sync(eventId, { reason = 'manual' } = {}) {
     if (!lock) return { skipped: 'in-flight' };
     emit('start', { reason });
     try {
+      await rebaseIfEventChanged(eventId);
       const pushed = await pushOutbox(eventId);
       const payload = await pullDelta(eventId);
       emit('done', { reason, pushed, version: payload.version });

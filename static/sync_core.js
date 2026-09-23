@@ -12,6 +12,64 @@ export const REPLICA_STORES = ['clients', 'client_pocs', 'documents', 'meetings'
 
 export const CURSOR_KEY = 'cursor';
 export const RECEIPTS_KEY = 'receipts';
+export const REBASE_KEY = 'event_rebase';
+
+const LEAD_FIELDS = ['name', 'company', 'email', 'phone', 'client_id', 'interest', 'next_step',
+  'notes'];
+const normName = (s) => String(s || '').trim().toLowerCase();
+
+/* The phone last synced a DIFFERENT event than the one it is signed in to —
+ * e.g. the server was rebuilt and the event recreated with a new id. Its cursor
+ * then belongs to the old event and must not be used against the new one.
+ * Cursors written before the server sent the event id have progress but no id;
+ * those can't be told apart, so they get the (harmless, one-time) rebase too. */
+export function eventChanged(cursor, eventId) {
+  if (!cursor || !eventId) return false;
+  if (cursor.event_id) return cursor.event_id !== eventId;
+  return (cursor.version || 0) > 0;
+}
+
+/* Re-points every locally held lead at the new event's clients (matched by
+ * name, since ids changed) and queues it again. The server dedupes leads on
+ * their own id, so re-sending one it already has is harmless. */
+export function rebaseLeads({ leads, outbox, oldClientNames, newClients }) {
+  const newIds = new Set(newClients.map((c) => c.id));
+  const byName = new Map(newClients.map((c) => [normName(c.name), c.id]));
+  const remap = (clientId) => {
+    if (!clientId) return { client_id: null, lostName: null };
+    if (newIds.has(clientId)) return { client_id: clientId, lostName: null };
+    const name = oldClientNames[clientId];
+    const match = name ? byName.get(normName(name)) : null;
+    return match ? { client_id: match, lostName: null } : { client_id: null, lostName: name || null };
+  };
+
+  const out = { leads: [], ops: [], unmatched: 0 };
+  const seen = new Set();
+  const requeue = (id, fields, captured_at) => {
+    const { client_id, lostName } = remap(fields.client_id);
+    if (fields.client_id && !client_id) out.unmatched += 1;
+    const next = { ...fields, client_id };
+    /* A client that no longer exists by name: keep what the rep saw in `company`. */
+    if (!client_id && lostName && !next.company) next.company = lostName;
+    const payload = { captured_at };
+    for (const k of LEAD_FIELDS) if (next[k] !== undefined) payload[k] = next[k];
+    out.ops.push({ id, type: 'lead', state: 'pending', created_at: captured_at, attempts: 0,
+                   payload });
+    seen.add(id);
+    return next;
+  };
+
+  for (const lead of leads) {
+    const next = requeue(lead.id, lead, lead.captured_at);
+    out.leads.push({ ...lead, client_id: next.client_id, company: next.company, synced: 0 });
+  }
+  for (const op of outbox) {
+    if (op.type === 'lead' && !seen.has(op.id)) {
+      requeue(op.id, op.payload || {}, (op.payload && op.payload.captured_at) || op.created_at);
+    }
+  }
+  return out;
+}
 
 export function docUrl(id) {
   return `/api/v1/documents/${id}/content`;

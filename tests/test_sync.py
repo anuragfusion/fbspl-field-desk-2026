@@ -4,18 +4,20 @@ The client half (IndexedDB replace, service worker) is covered by
 tests/sync_core.test.js and static/selftest.html.
 """
 
+import hashlib
 import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _TMP = tempfile.mkdtemp(prefix="fielddesk-sync-")
 os.environ.setdefault("DATABASE_URL", "postgresql://postgres:postgres@localhost:5433/postgres")
 
-import httpx                                                     # noqa: E402
 from fastapi.testclient import TestClient                       # noqa: E402
 
 from app import auth as A                                       # noqa: E402
+from app import storage                                         # noqa: E402
 from app.db import bump_version, db, init_db, new_id, now_iso   # noqa: E402
 from app.main import app                                        # noqa: E402
 
@@ -29,6 +31,23 @@ class Base(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(app)
+        # Storage is in-memory: tests must never reach a real Supabase bucket.
+        self.stored = {}
+
+        def put_bytes(data):
+            digest = hashlib.sha256(data).hexdigest()
+            self.stored[digest] = data
+            return digest, len(data)
+
+        def signed_url(key):
+            if key not in self.stored:
+                raise FileNotFoundError(key)
+            return f"https://storage.test/signed/{key}"
+
+        for name, fn in (("put_bytes", put_bytes), ("signed_url", signed_url)):
+            p = mock.patch.object(storage, name, fn)
+            p.start()
+            self.addCleanup(p.stop)
         with db() as conn:
             for t in ("op_log", "deleted_rows", "update_receipts", "leads", "updates",
                       "meetings", "documents", "client_pocs", "clients",
@@ -181,6 +200,12 @@ class SyncTests(Base):
                 (cid, self.event_id, name, "must", v, now_iso(), now_iso()))
             return cid, v
 
+    def test_sync_carries_the_event_id(self):
+        """Phones store it in their cursor; without it a recreated event is invisible
+        to them and they sync the new event with the old event's version forever."""
+        r = self.client.get(f"/api/v1/events/{self.event_id}/sync", headers=self.h_priya)
+        self.assertEqual(r.json()["event"]["id"], self.event_id)
+
     def test_first_sync_is_full_and_carries_everything(self):
         self._add_client()
         r = self.client.get(f"/api/v1/events/{self.event_id}/sync?since=0", headers=self.h_priya)
@@ -260,21 +285,13 @@ class DocumentTests(Base):
             files={"file": ("brief.pdf", PDF, "application/pdf")}).json()
         self.assertEqual(up["size_bytes"], len(PDF))
 
-        # TestClient's transport routes every request (even to another host) back
-        # into this same app, so it can't actually follow a redirect out to Supabase
-        # — check the redirect itself here, then hit the signed URL for real below.
         got = self.client.get(f"/api/v1/documents/{up['id']}/content", headers=self.h_priya,
                               follow_redirects=False)
         self.assertEqual(got.status_code, 307)
-        signed = got.headers["location"]
-        self.assertIn("supabase.co", signed)
-
-        real = httpx.get(signed)
-        self.assertEqual(real.status_code, 200)
-        self.assertEqual(real.content, PDF)
-        # The client compares this against the blob it received before caching it —
-        # that check is what stops a captive portal poisoning the document cache.
-        self.assertEqual(real.headers["content-length"], str(len(PDF)))
+        self.assertEqual(got.headers["location"],
+                         f"https://storage.test/signed/{up['checksum_sha256']}")
+        self.assertEqual(self.stored[up["checksum_sha256"]], PDF)
+        self.assertEqual(up["checksum_sha256"], hashlib.sha256(PDF).hexdigest())
 
     def test_field_user_cannot_upload(self):
         r = self.client.post(

@@ -572,6 +572,9 @@ function bind() {
 
   sync.bus.addEventListener('done', afterSync);
   sync.bus.addEventListener('outbox', () => { reload().then(setStatus); });
+  sync.bus.addEventListener('rebased', (e) => {
+    if (e.detail.leads) toast(`Event data refreshed — ${e.detail.leads} saved lead(s) re-sent`, 'ok');
+  });
   sync.bus.addEventListener('unauthorised', () => {
     toast('Your session was ended by an administrator. Sign in again.', 'err');
     idb.del('meta', 'session').then(() => setTimeout(() => location.reload(), 2500));

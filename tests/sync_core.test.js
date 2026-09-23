@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import {
   REPLICA_STORES, applyDelta, readiness, formatReadiness,
   validateSync, validateOutboxReply, storageWarning, docUrl,
+  eventChanged, rebaseLeads,
 } from '../static/sync_core.js';
 
 /* Fake store with the same synchronous shape as the IndexedDB adapter.
@@ -163,4 +164,83 @@ test('storage warning fires before the download, not during', () => {
   assert.ok(storageWarning({ usage: 900e6, quota: 1000e6 }, 200e6));
   assert.equal(storageWarning({ usage: 100e6, quota: 4000e6 }, 62e6), null);
   assert.equal(storageWarning(undefined, 62e6), null, 'estimate() may be unavailable');
+});
+
+test('a recreated event is detected; a first sign-in or the same event is not', () => {
+  assert.equal(eventChanged({ version: 12, event_id: 'old' }, 'new'), true);
+  assert.equal(eventChanged({ version: 12, event_id: 'same' }, 'same'), false);
+  assert.equal(eventChanged({ version: 0, event_id: null }, 'new'), false, 'first sign-in');
+  assert.equal(eventChanged(undefined, 'new'), false);
+});
+
+test('a cursor from before the server sent the event id gets the one-time rebase', () => {
+  /* Every phone in the field today holds one of these: progress, no event id. */
+  assert.equal(eventChanged({ version: 12, event_id: undefined }, 'any'), true);
+  assert.equal(eventChanged({ version: 12 }, 'any'), true);
+});
+
+test('after a full sync the cursor carries the event id, so no second rebase', () => {
+  const store = fakeStore();
+  applyDelta(store, { full: true, version: 3, event: { id: 'ev-1' }, tombstones: {} });
+  const cursor = store._get('meta', 'cursor');
+  assert.equal(cursor.event_id, 'ev-1');
+  assert.equal(eventChanged(cursor, 'ev-1'), false);
+});
+
+test('rebase re-points leads at the new clients by name and re-queues all of them', () => {
+  const plan = rebaseLeads({
+    leads: [
+      { id: 'L1', name: 'Dana', client_id: 'old-meridian', captured_at: 't1', synced: 1,
+        captured_by_name: 'Priya' },
+      { id: 'L2', name: 'Sam', client_id: null, company: 'Walk-in', captured_at: 't2', synced: 1 },
+      { id: 'L3', name: 'Jo', client_id: 'old-gone', captured_at: 't3', synced: 0 },
+    ],
+    outbox: [
+      { id: 'L3', type: 'lead', state: 'rejected', payload: { name: 'Jo', client_id: 'old-gone',
+        captured_at: 't3' } },
+      { id: 'R1', type: 'receipt', state: 'pending', payload: { update_id: 'old-update' } },
+    ],
+    oldClientNames: { 'old-meridian': 'Meridian Insurance', 'old-gone': 'Closed Agency' },
+    newClients: [{ id: 'new-meridian', name: '  meridian insurance ' }, { id: 'new-acme', name: 'Acme' }],
+  });
+
+  const lead = (id) => plan.leads.find((l) => l.id === id);
+  const op = (id) => plan.ops.find((o) => o.id === id);
+  assert.equal(lead('L1').client_id, 'new-meridian', 'matched by name, case/space-insensitive');
+  assert.equal(lead('L1').synced, 0, 'marked unsynced so the UI shows it going up again');
+  assert.equal(lead('L2').client_id, null);
+  assert.equal(lead('L3').client_id, null, 'no client by that name any more');
+  assert.equal(lead('L3').company, 'Closed Agency', 'what the rep saw is kept, not lost');
+  assert.equal(plan.unmatched, 1);
+
+  assert.deepEqual(plan.ops.map((o) => o.id).sort(), ['L1', 'L2', 'L3'], 'one op per lead, no duplicates');
+  for (const o of plan.ops) assert.equal(o.state, 'pending', 'a rejected op is retried');
+  assert.equal(op('L1').payload.client_id, 'new-meridian');
+  assert.equal(op('L1').payload.captured_at, 't1', 'capture time survives the rebase');
+  assert.equal(op('L1').payload.captured_by_name, undefined, 'only real lead fields are sent');
+  assert.equal(op('R1'), undefined, 'receipts are left alone, not rewritten as leads');
+});
+
+test('rebase is idempotent: running it on already-rebased leads changes nothing', () => {
+  const args = {
+    leads: [{ id: 'L1', name: 'Dana', client_id: 'new-meridian', captured_at: 't1' }],
+    outbox: [],
+    oldClientNames: {},
+    newClients: [{ id: 'new-meridian', name: 'Meridian Insurance' }],
+  };
+  const plan = rebaseLeads(args);
+  assert.equal(plan.leads[0].client_id, 'new-meridian');
+  assert.equal(plan.unmatched, 0);
+});
+
+test('an outbox lead with no local record is still re-queued and re-pointed', () => {
+  const plan = rebaseLeads({
+    leads: [],
+    outbox: [{ id: 'L9', type: 'lead', state: 'pending', created_at: 't9',
+               payload: { name: 'X', client_id: 'old-m', captured_at: 't9' } }],
+    oldClientNames: { 'old-m': 'Meridian' },
+    newClients: [{ id: 'new-m', name: 'Meridian' }],
+  });
+  assert.equal(plan.ops[0].payload.client_id, 'new-m');
+  assert.equal(plan.ops[0].payload.captured_at, 't9');
 });

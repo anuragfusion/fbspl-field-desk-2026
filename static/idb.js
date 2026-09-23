@@ -141,6 +141,19 @@ export async function settleDrain(acceptedIds, rejected) {
   return done(tx);
 }
 
+/* Re-queued leads and clearing the pending-rebase marker commit together, so a
+ * crash can never lose the marker before the leads are safely re-queued. */
+export async function applyRebase(plan, rebaseKey) {
+  const db = await open();
+  const tx = db.transaction(['leads', 'outbox', 'meta'], 'readwrite');
+  const leads = tx.objectStore('leads');
+  const outbox = tx.objectStore('outbox');
+  for (const lead of plan.leads) leads.put(lead);
+  for (const op of plan.ops) outbox.put(op);
+  tx.objectStore('meta').delete(rebaseKey);
+  return done(tx);
+}
+
 export async function wipeEventData() {
   const db = await open();
   const tx = db.transaction(ALL_STORES, 'readwrite');

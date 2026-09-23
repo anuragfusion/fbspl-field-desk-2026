@@ -68,7 +68,7 @@ def _rows(conn, table: str, event_id: str, since: int) -> list[dict]:
 def sync(event_id: str, since: int = 0, user=Depends(A.current_user),
          conn = Depends(get_db)):
     member(event_id, conn, user)
-    ev = conn.execute("SELECT version, name, venue, starts_on, ends_on, timezone"
+    ev = conn.execute("SELECT id, version, name, venue, starts_on, ends_on, timezone"
                       " FROM events WHERE id = %s", (event_id,)).fetchone()
 
     payload = {
