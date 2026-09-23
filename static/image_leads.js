@@ -10,7 +10,12 @@ const esc = (s) => String(s == null ? '' : s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const errText = (err) => (err && err.message) || String(err || 'Something went wrong');
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
-const fmtTime = (s) => String(s || '').replace('T', ' ').replace('Z', '').slice(0, 16);
+const pad2 = (n) => String(n).padStart(2, '0');
+const fmtTime = (s) => {
+  const d = new Date(s);
+  if (!s || Number.isNaN(d.getTime())) return '';
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+};
 const bySlot = (a, b) => (a.slot || 0) - (b.slot || 0);
 const EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp',
               'image/heic': 'heic', 'image/heif': 'heif' };
@@ -24,6 +29,7 @@ let started = false;
 let sheet = null;
 let opening = false;
 let cam = null;
+let camReq = 0;
 let viewer = null;
 let dialogOpen = null;
 let pickSlot = 1;
@@ -179,6 +185,7 @@ async function openSheet(leadId) {
                  slotErr: {}, busy: {}, replacing: {}, submitErr: '', submitting: false };
     if (leadId) {
       let rec = null;
+      try { await queue.recoverInterrupted(leadId); } catch { /* shown as processing; Replace still works */ }
       try { rec = await queue.getLead(leadId); } catch { rec = null; }
       if (!rec || !rec.lead) { toast('That draft is no longer on this phone', 'err'); return; }
       const l = rec.lead;
@@ -352,7 +359,9 @@ function renderPhotos() {
   if (!sh || !box) return;
   sheetPool.begin();
   box.innerHTML = [1, 2].map((slot) => {
-    const p = sh.photos.find((x) => x && x.slot === slot);
+    /* During a replace the current photo and its replacement share the slot. */
+    const inSlot = sh.photos.filter((x) => x && x.slot === slot);
+    const p = inSlot.find((x) => x.state !== 'processing') || inSlot[0];
     const st = slotStatus(sh, slot, p);
     const status = `<div class="il-st${st.err ? ' err' : ''}">${esc(st.text)}</div>`;
     const pick = `<div class="btns">
@@ -505,10 +514,15 @@ async function openCamera(slot) {
   pickSlot = slot;
   const md = navigator.mediaDevices;
   if (!md || typeof md.getUserMedia !== 'function') { pickFile('ilCapture', slot); return; }
+  const req = ++camReq;
   let stream;
   try {
     stream = await md.getUserMedia(CAMERA);
+    /* The user may have left, cancelled or tapped again while the camera was
+     * starting; a stream nobody asked for any more must not stay live. */
+    if (!sheet || document.hidden || req !== camReq) { stopStream(stream); return; }
   } catch (err) {
+    if (req !== camReq) return;
     const name = err && err.name;
     if (name === 'NotAllowedError' || name === 'SecurityError' || name === 'PermissionDeniedError') {
       const st = await permissionState();
@@ -520,7 +534,6 @@ async function openCamera(slot) {
     pickFile('ilCapture', slot);
     return;
   }
-  if (!sheet) { stopStream(stream); return; }
   setHelp(null);
   showCamera(stream, slot);
 }
@@ -531,6 +544,7 @@ function stopStream(stream) {
 
 function showCamera(stream, slot) {
   closeCamera();
+  camReq += 1;
   cam = { stream, slot };
   $('ilCamHost').innerHTML = `<div class="il-cam" role="dialog" aria-modal="true" aria-label="Camera">
     <video id="ilVideo" playsinline muted autoplay></video>
@@ -549,6 +563,7 @@ function showCamera(stream, slot) {
 }
 
 function closeCamera() {
+  camReq += 1;
   if (cam) stopStream(cam.stream);
   const v = $('ilVideo');
   if (v) v.srcObject = null;
@@ -722,14 +737,21 @@ function cardHtml({ lead: l, photos }) {
   return `<article class="il-card${draft ? ' draft' : ''}" data-lead="${esc(l.id)}" data-draft="${draft ? '1' : '0'}"
       role="button" tabindex="0">
     <div class="il-ch"><div style="min-width:0">
-        <div class="il-cn">${esc(leadName(l))}${!l.client_id ? ' <span class="badge mute">Other</span>' : ''}</div>
+        <div class="il-cn">${esc(leadName(l))}${!l.client_id && l.other_name ? ' <span class="badge mute">Other</span>' : ''}</div>
         ${l.captured_at ? `<div class="il-cm">${esc(fmtTime(l.captured_at))}</div>` : ''}</div>
-      <span class="badge ${BADGE[st.key] || 'mute'}">${esc(st.label || st.key)}</span></div>
+      <span class="badge ${BADGE[st.key] || 'mute'}">${esc(
+        st.key === 'queued' && (l.attempts || 0) > 0 && navigator.onLine ? 'Retrying' : (st.label || st.key))}</span></div>
     ${note ? `<div class="il-cnote">${esc(note.length > 140 ? `${note.slice(0, 140)}…` : note)}</div>` : ''}
     ${thumbs ? `<div class="il-cthumbs">${thumbs}</div>` : ''}
     ${st.key === 'failed' && l.error ? `<div class="il-cerr">${esc(l.error)}</div>` : ''}
+    ${st.key === 'queued' && (l.attempts || 0) >= 3 && l.error
+    ? `<div class="il-cerr">Still trying (${esc(l.attempts)} attempts): ${esc(l.error)}</div>` : ''}
     ${draft ? `<div class="il-cact"><button class="btn tiny" type="button" data-il-act="resume" data-id="${esc(l.id)}">Complete draft</button></div>` : ''}
-    ${st.key === 'failed' ? `<div class="il-cact"><button class="btn tiny" type="button" data-il-act="retry" data-id="${esc(l.id)}">Retry</button></div>` : ''}
+    ${st.key === 'failed' ? `<div class="il-cact">
+      <button class="btn tiny" type="button" data-il-act="retry" data-id="${esc(l.id)}">Retry</button>
+      ${!l.server_created ? `<button class="btn ghost tiny" type="button" data-il-act="edit" data-id="${esc(l.id)}">Edit</button>` : ''}
+      <button class="btn sub tiny" type="button" data-il-act="discard" data-id="${esc(l.id)}" data-server="${l.server_created ? '1' : '0'}">Remove from phone</button>
+    </div>` : ''}
   </article>`;
 }
 
@@ -789,6 +811,27 @@ async function onListClick(e) {
     e.stopPropagation();
     const id = act.dataset.id;
     if (act.dataset.ilAct === 'resume') { openSheet(id); return; }
+    if (act.dataset.ilAct === 'edit') {
+      try {
+        if (await queue.reopenFailed(id)) openSheet(id);
+      } catch (err) { toast(`Could not reopen: ${errText(err)}`, 'err'); }
+      scheduleList();
+      return;
+    }
+    if (act.dataset.ilAct === 'discard') {
+      const onServer = act.dataset.server === '1';
+      const ok = await confirmDialog({
+        title: 'Remove this image lead from the phone?',
+        body: onServer
+          ? 'Part of it already reached the office, and it stays there. Only the copy on this phone is removed.'
+          : 'It never reached the office. The client, note and photos on this phone will be removed.',
+        yes: 'Remove', no: 'Keep' });
+      if (!ok) return;
+      try { await queue.discardFailed(id); toast('Removed from this phone'); }
+      catch (err) { toast(`Could not remove: ${errText(err)}`, 'err'); }
+      scheduleList();
+      return;
+    }
     if (act.dataset.ilAct === 'retry') {
       act.disabled = true;
       try {
@@ -920,9 +963,19 @@ export function init(c) {
       queue.bus.addEventListener('changed', onQueueChanged);
       queue.bus.addEventListener('auth', () => toast('Sign in again to upload image leads', 'err'));
     }
+    /* e.g. a HEIC original on Android Chrome: the file is fine and uploads, the
+     * browser just cannot draw it. Error events don't bubble, hence capture. */
+    document.addEventListener('error', (e) => {
+      const img = e.target;
+      if (!(img instanceof HTMLImageElement) || !img.closest('#imageLeadList, #imgHost')) return;
+      const note = document.createElement('span');
+      note.className = 'il-noprev';
+      note.textContent = 'Preview not available';
+      img.replaceWith(note);
+    }, true);
     window.addEventListener('online', () => { if (viewer) loadStage(); });
     window.addEventListener('pagehide', closeCamera);
-    document.addEventListener('visibilitychange', () => { if (document.hidden && cam) closeCamera(); });
+    document.addEventListener('visibilitychange', () => { if (document.hidden) closeCamera(); });
   }
   const s = session();
   if (s && !started) {

@@ -382,3 +382,7 @@ body.il-open{overflow:hidden}
 .il-vbar{flex:none;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;
   padding:12px 14px calc(12px + env(safe-area-inset-bottom))}
 .il-dlg{z-index:96;align-items:center}
+.il-noprev{display:flex;align-items:center;justify-content:center;width:100%;height:100%;
+  padding:6px;text-align:center;font-size:11.5px;color:var(--gray-700)}
+/* Keep toasts clear of the camera shutter and the sheet's footer buttons. */
+body.il-open .toast{bottom:calc(128px + env(safe-area-inset-bottom))}

@@ -26,6 +26,7 @@ const emit = (name, detail = {}) => bus.dispatchEvent(new CustomEvent(name, { de
 const changed = (leadId) => emit('changed', { lead_id: leadId });
 
 let CFG = { ...DEFAULT_CONFIG };
+const activeJobs = new Set();
 let current = null;
 let authStopped = false;
 const remember = (session) => { if (session && session.user && session.event) current = session; };
@@ -261,16 +262,19 @@ export async function deleteDraft(id) {
   changed(id);
 }
 
-/* Replaces the slot's photos and resets the draft's running photo count, in one transaction. */
-function writeSlot(leadId, slot, photo) {
+/* Writes a slot and resets the draft's running photo count, in one transaction.
+ * keepOld: a replacement being processed sits next to the current photo, which
+ * is only dropped once the new one is safely saved (see settlePhoto). */
+function writeSlot(leadId, slot, photo, { keepOld = false } = {}) {
   return idb.imageTx([LEADS, PHOTOS], 'readwrite', (s) => {
     const box = { count: 0 };
     const req = s[PHOTOS].index('by_lead').getAll(leadId);
     req.onsuccess = () => {
-      const keep = req.result.filter((p) => p.slot !== slot);
-      for (const p of req.result) if (p.slot === slot) s[PHOTOS].delete(p.id);
+      if (!keepOld) for (const p of req.result) if (p.slot === slot) s[PHOTOS].delete(p.id);
       if (photo) s[PHOTOS].put(photo);
-      box.count = keep.length + (photo ? 1 : 0);
+      const slots = new Set(req.result.filter((p) => keepOld || p.slot !== slot).map((p) => p.slot));
+      if (photo) slots.add(slot);
+      box.count = slots.size;
       const lr = s[LEADS].get(leadId);
       lr.onsuccess = () => {
         if (lr.result) s[LEADS].put({ ...lr.result, photo_count: box.count, updated_at: nowIso() });
@@ -296,47 +300,96 @@ export async function addPhoto(session, leadId, slot, blob) {
     id: newId(), lead_id: leadId, slot, bytes: null, mime: null, size: 0, width: null,
     height: null, compressed: false, sha256: null, state: 'processing', content_url: null, error: null,
   };
-  const { count } = await writeSlot(leadId, slot, base);
-  changed(leadId);
-
-  const t0 = performance.now();
-  let photo;
+  activeJobs.add(base.id);
   try {
-    const r = await processPhoto(blob, CFG, (pct, stage, msg) => log(leadId, slot, count, pct, stage, msg));
-    photo = {
-      ...base, bytes: r.bytes, mime: r.mime, size: r.size, width: r.width, height: r.height,
-      compressed: r.compressed, sha256: r.sha256, state: 'ready',
-    };
-    const saved = await settlePhoto(photo);
-    if (!saved) return photo;
-    const smaller = r.original_size > 0 ? Math.max(0, Math.round((1 - r.size / r.original_size) * 100)) : 0;
-    log(leadId, slot, count, 100, 'compress',
-      `saved on phone, ${smaller}% smaller (${Math.round(performance.now() - t0)} ms)`);
-  } catch (err) {
-    photo = { ...base, state: 'failed', error: userMessage(err) };
-    const code = typeof err.code === 'string' ? err.code : (err.name || 'PROCESS_FAILED');
-    log(leadId, slot, count, null, 'error', `${code} photo not saved`);
-    try { await settlePhoto(photo); } catch { /* the record stays 'processing'; the UI can replace it */ }
+    const { count } = await writeSlot(leadId, slot, base, { keepOld: true });
+    changed(leadId);
+
+    const t0 = performance.now();
+    let photo;
+    try {
+      const r = await processPhoto(blob, CFG, (pct, stage, msg) => log(leadId, slot, count, pct, stage, msg));
+      photo = {
+        ...base, bytes: r.bytes, mime: r.mime, size: r.size, width: r.width, height: r.height,
+        compressed: r.compressed, sha256: r.sha256, state: 'ready',
+      };
+      const saved = await settlePhoto(photo, { replaceSlot: true });
+      if (!saved) return photo;
+      const smaller = r.original_size > 0 ? Math.max(0, Math.round((1 - r.size / r.original_size) * 100)) : 0;
+      log(leadId, slot, count, 100, 'compress',
+        `saved on phone, ${smaller}% smaller (${Math.round(performance.now() - t0)} ms)`);
+    } catch (err) {
+      const code = typeof err.code === 'string' ? err.code : (err.name || 'PROCESS_FAILED');
+      log(leadId, slot, count, null, 'error', `${code} photo not saved`);
+      /* A failed replacement leaves the current photo exactly as it was. */
+      if (await dropIfReplacement(base)) {
+        changed(leadId);
+        throw Object.assign(new Error(`Kept the previous photo. ${userMessage(err)}`), { code: 'KEPT_PREVIOUS' });
+      }
+      photo = { ...base, state: 'failed', error: userMessage(err) };
+      try { await settlePhoto(photo); } catch { /* recoverInterrupted() cleans it up */ }
+    }
+    changed(leadId);
+    return photo;
+  } finally {
+    activeJobs.delete(base.id);
   }
-  changed(leadId);
-  return photo;
 }
 
 /* Writes the processed result only if the photo was not replaced and the lead
- * is still a draft meanwhile; returns whether it was written. */
-function settlePhoto(photo) {
+ * is still a draft meanwhile; returns whether it was written. replaceSlot drops
+ * the photo it replaces in the same transaction. */
+function settlePhoto(photo, { replaceSlot = false } = {}) {
   return idb.imageTx([LEADS, PHOTOS], 'readwrite', (s) => {
     const box = { saved: false };
     const lr = s[LEADS].get(photo.lead_id);
     const pr = s[PHOTOS].get(photo.id);
-    pr.onsuccess = () => {
-      if (lr.result && lr.result.state === 'draft' && pr.result) {
-        s[PHOTOS].put(photo);
-        box.saved = true;
+    const all = s[PHOTOS].index('by_lead').getAll(photo.lead_id);
+    all.onsuccess = () => {
+      if (!(lr.result && lr.result.state === 'draft' && pr.result)) return;
+      s[PHOTOS].put(photo);
+      if (replaceSlot) {
+        for (const p of all.result) if (p.slot === photo.slot && p.id !== photo.id) s[PHOTOS].delete(p.id);
       }
+      box.saved = true;
     };
     return box;
   }).then((b) => b.saved);
+}
+
+/* Deletes a failed replacement's placeholder when an earlier photo still holds
+ * the slot; returns whether there was one to fall back to. */
+function dropIfReplacement(photo) {
+  return idb.imageTx([PHOTOS], 'readwrite', (s) => {
+    const box = { hadPrevious: false };
+    const req = s[PHOTOS].index('by_lead').getAll(photo.lead_id);
+    req.onsuccess = () => {
+      box.hadPrevious = req.result.some((p) => p.slot === photo.slot && p.id !== photo.id
+        && p.state !== 'processing');
+      if (box.hadPrevious) s[PHOTOS].delete(photo.id);
+    };
+    return box;
+  }).then((b) => b.hadPrevious);
+}
+
+/* A photo left 'processing' by a killed tab would block Upload forever. Anything
+ * processing that this page isn't working on was interrupted. */
+export async function recoverInterrupted(leadId) {
+  const stuck = (await idb.getIndex(PHOTOS, 'by_lead', leadId))
+    .filter((p) => p.state === 'processing' && !activeJobs.has(p.id));
+  if (!stuck.length) return 0;
+  await idb.imageTx([PHOTOS], 'readwrite', (s) => {
+    const req = s[PHOTOS].index('by_lead').getAll(leadId);
+    req.onsuccess = () => {
+      for (const p of stuck) {
+        const covered = req.result.some((o) => o.slot === p.slot && o.id !== p.id && o.state !== 'processing');
+        if (covered) s[PHOTOS].delete(p.id);
+        else s[PHOTOS].put({ ...p, state: 'failed', error: 'Interrupted — take this photo again.' });
+      }
+    };
+  });
+  changed(leadId);
+  return stuck.length;
 }
 
 export async function removePhoto(leadId, slot) {
@@ -389,6 +442,37 @@ export async function retry(leadId) {
   });
   changed(leadId);
   run(current);
+}
+
+/* A lead the server refused for good (e.g. its client no longer exists) would
+ * otherwise fail on every Retry. If the server never created it, it can go
+ * back to being an editable draft. */
+export async function reopenFailed(leadId) {
+  const lead = await idb.get(LEADS, leadId);
+  if (!lead || lead.state !== 'failed' || lead.server_created) return false;
+  await idb.put(LEADS, {
+    ...lead, state: 'draft', attempts: 0, next_at: 0, error: null, error_permanent: false,
+    checksum_retries: 0, updated_at: nowIso(),
+  });
+  changed(leadId);
+  return true;
+}
+
+/* Removes a failed lead from this phone only. If the server already holds part
+ * of it, it stays there for the office to see (floor users cannot delete). */
+export async function discardFailed(leadId) {
+  const lead = await idb.get(LEADS, leadId);
+  if (!lead || lead.state !== 'failed') return false;
+  await idb.imageTx([LEADS, PHOTOS, LOGS], 'readwrite', (s) => {
+    s[LEADS].delete(leadId);
+    for (const name of [PHOTOS, LOGS]) {
+      const req = s[name].index('by_lead').getAllKeys(leadId);
+      req.onsuccess = () => { for (const k of req.result) s[name].delete(k); };
+    }
+  });
+  log(leadId, null, lead.photo_count, null, 'info', `removed from phone after failure server_created=${!!lead.server_created}`, { server: false });
+  changed(leadId);
+  return true;
 }
 
 /* --- upload run --------------------------------------------------------- */

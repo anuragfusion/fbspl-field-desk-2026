@@ -7,7 +7,16 @@ import * as idb from './idb.js';
 import * as sync from './sync.js';
 import { formatReadiness } from './sync_core.js';
 import * as clientFilters from './client_filters.js';
-import * as imageLeads from './image_leads.js';
+
+/* Loaded on its own so a failure in the image-leads code can only disable that
+ * feature — never the briefs, documents and leads the floor depends on. */
+const imageLeads = import('./image_leads.js').catch((err) => {
+  console.warn('image leads unavailable:', err);
+  return null;
+});
+const startImageLeads = () => imageLeads.then((m) => m && m.init({
+  getSession: () => S.session, getClients: () => S.clients, toast,
+}));
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? '' : s)
@@ -74,7 +83,8 @@ async function signIn(username, password, remember) {
 }
 
 async function signOut() {
-  if (!(await imageLeads.beforeSignOut(S.session))) return;
+  const il = await imageLeads;
+  if (il && !(await il.beforeSignOut(S.session))) return;
   try { await fetch('/api/v1/auth/logout', { method: 'POST' }); } catch { /* offline is fine */ }
   await idb.del('meta', 'session');
   location.reload();
@@ -479,6 +489,15 @@ function showApp(session) {
 }
 
 function bind() {
+  let blockedTimer = null;
+  const nagBlocked = () => toast('Close other Field Desk tabs or windows to finish updating', 'err');
+  window.addEventListener('fielddesk-idb-blocked', () => {
+    nagBlocked();
+    clearInterval(blockedTimer);
+    blockedTimer = setInterval(nagBlocked, 3000);
+  });
+  window.addEventListener('fielddesk-idb-open', () => clearInterval(blockedTimer));
+
   document.querySelectorAll('#tabs button').forEach((b) => {
     b.onclick = () => {
       document.querySelectorAll('#tabs button').forEach((x) => x.setAttribute('aria-selected', x === b));
@@ -557,7 +576,7 @@ function bind() {
     try {
       S.session = await signIn($('gUser').value, $('gPass').value, $('gKeep').checked);
       showApp(S.session);
-      imageLeads.init({ getSession: () => S.session, getClients: () => S.clients, toast });
+      startImageLeads();
       await docsmod.requestPersistence();
       await sync.sync(S.session.event.id, { reason: 'first-run' });
       await afterSync();
@@ -623,7 +642,7 @@ async function boot() {
    * path at all — not even an optimistic one, because a captive portal makes it
    * hang for thirty seconds. */
   showApp(S.session);
-  imageLeads.init({ getSession: () => S.session, getClients: () => S.clients, toast });
+  startImageLeads();
   await reload();
   setStatus();
   sync.startAutoSync(S.session.event.id);

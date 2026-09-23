@@ -264,8 +264,11 @@
         <td style="font-size:12.5px">{{ l.note or '' }}</td>
         <td>{{ l.by_name or '—' }}</td>
         <td class="tight">{% for p in l.photos %}<a href="{{ p.content_url }}" target="_blank"
-            rel="noopener"><img src="{{ p.content_url }}" loading="lazy" alt="Photo {{ p.slot }}"
-            width="64" height="64" style="object-fit:cover;border-radius:6px;margin-right:4px"></a>{% endfor %}</td>
+            rel="noopener">{% if p.mime_type in ('image/heic', 'image/heif') %}<span class="badge mute"
+            style="width:64px;height:64px;justify-content:center;border-radius:6px;margin-right:4px;vertical-align:top"
+            title="Most browsers cannot preview HEIC — click to download">HEIC · open</span>{% else %}<img
+            src="{{ p.content_url }}" loading="lazy" alt="Photo {{ p.slot }}" width="64" height="64"
+            style="object-fit:cover;border-radius:6px;margin-right:4px">{% endif %}</a>{% endfor %}</td>
         <td class="tight">{% if l.photos|length >= l.photo_count %}<span class="badge ok">complete</span>
           {% else %}<span class="badge crit">uploading {{ l.photos|length }}/{{ l.photo_count }}</span>{% endif %}</td>
         <td class="tight">

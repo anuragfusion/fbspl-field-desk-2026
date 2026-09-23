@@ -61,9 +61,13 @@ function openAt(version) {
       /* Step aside when a newer release in another tab needs to upgrade. */
       db.onversionchange = () => { db.close(); if (_db === db) _db = null; };
       _db = db;
+      globalThis.dispatchEvent(new CustomEvent('fielddesk-idb-open'));
       resolve(db);
     };
     req.onerror = () => reject(req.error);
+    /* An old tab still holding the previous version: without a word the app
+     * would sit on a dead sign-in screen until that tab happens to close. */
+    req.onblocked = () => globalThis.dispatchEvent(new CustomEvent('fielddesk-idb-blocked'));
   });
 }
 
