@@ -81,6 +81,7 @@
   <button role="tab" aria-selected="false" data-p="docs">Documents <span class="pill" id="pDocs">0</span></button>
   <!-- Schedule tab disabled — see p-sched panel below for reinstating -->
   <button role="tab" aria-selected="false" data-p="leads">Leads <span class="pill" id="pLeads">0</span></button>
+  <button role="tab" aria-selected="false" data-p="imageleads">Image Leads <span class="pill" id="pImageLeads">0</span></button>
 </nav>
 
 <main class="wrap">
@@ -153,7 +154,22 @@
       <tbody id="leadBody"></tbody>
     </table></div>
   </section>
+
+  <section class="panel" id="p-imageleads" role="tabpanel">
+    <div class="sec-h"><div><h2>Image leads</h2>
+      <div class="sub">Photos of cards you captured. Saved on this phone first, uploaded when there is signal.</div></div></div>
+    <div class="il-counts" id="imageLeadCounts"></div>
+    <div class="il-list" id="imageLeadList"></div>
+  </section>
 </main>
+
+<button class="fab hide" id="imgFab" type="button" aria-label="New image lead">
+  <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"
+       stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg>
+</button>
+<input class="il-file" type="file" id="ilGallery" accept="image/*,.heic,.heif" tabindex="-1" aria-hidden="true">
+<input class="il-file" type="file" id="ilCapture" accept="image/*" capture="environment" tabindex="-1" aria-hidden="true">
+<div id="imgHost"></div>
 
 <div class="toast" id="toast"></div>
 <div id="modalHost"></div>

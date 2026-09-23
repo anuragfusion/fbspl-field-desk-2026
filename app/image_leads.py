@@ -427,9 +427,15 @@ def photo_content(photo_id: str, user=Depends(A.require_member), conn = Depends(
 
 @router.delete("/image-leads/{lead_id}")
 def delete_image_lead(lead_id: str, user=Depends(A.require_admin), conn = Depends(get_db)):
+    delete_lead(conn, lead_id, user)
+    return {"ok": True}
+
+
+def delete_lead(conn, lead_id: str, user) -> int:
     """Rows are deleted first but not committed; files next; commit only once
-    the files are gone. A storage failure rolls the rows back, so the lead stays
-    visible and the delete can simply be retried."""
+    the files are gone. A storage failure raises before the commit, so the
+    caller's rollback keeps the lead visible and the delete can be retried.
+    Returns the number of photos removed."""
     lead = _lead_for(conn, lead_id, user, allow_admin=True)
     keys = [r["storage_key"] for r in conn.execute(
         "SELECT storage_key FROM image_lead_photos WHERE image_lead_id = %s", (lead_id,))]
@@ -446,7 +452,7 @@ def delete_image_lead(lead_id: str, user=Depends(A.require_admin), conn = Depend
     _log(logging.INFO, "SERVER", lead_id,
          f"deleted with {len(keys)} photo(s) by admin={_short(user['id'])}"
          f" event={_short(lead['event_id'])}")
-    return {"ok": True}
+    return len(keys)
 
 
 @router.get("/events/{event_id}/image-leads/export.csv")

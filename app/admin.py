@@ -14,7 +14,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from . import auth as A
-from . import storage
+from . import image_leads, storage
 from .db import BASE_DIR, audit, bump_version, get_db, new_id, now_iso
 from .importer import import_workbook
 from .phase1 import build_pack
@@ -94,7 +94,7 @@ def dashboard(request: Request, msg: str = "", kind: str = "ok",
 
     ctx = {"user": user, "event": event, "msg": msg, "kind": kind,
            "users": conn.execute("SELECT * FROM users ORDER BY role, username").fetchall(),
-           "clients": [], "updates": [], "documents": [], "leads": [], "counts": {}}
+           "clients": [], "updates": [], "documents": [], "leads": [], "image_leads": [], "counts": {}}
 
     if event:
         e = event["id"]
@@ -114,6 +114,13 @@ def dashboard(request: Request, msg: str = "", kind: str = "ok",
             " LEFT JOIN users u ON u.id = l.captured_by"
             " LEFT JOIN clients c ON c.id = l.client_id"
             " WHERE l.event_id = %s ORDER BY l.captured_at DESC LIMIT 100", (e,)).fetchall()
+        img = conn.execute(
+            "SELECT l.*, u.full_name AS by_name FROM image_leads l"
+            " LEFT JOIN users u ON u.id = l.captured_by"
+            " WHERE l.event_id = %s ORDER BY l.captured_at DESC LIMIT 200", (e,)).fetchall()
+        photos = image_leads._photos_of(conn, [l["id"] for l in img])
+        ctx["image_leads"] = [{**l, "photos": [image_leads._photo_out(p) for p in photos[l["id"]]]}
+                              for l in img]
         ctx["members"] = {r["user_id"] for r in conn.execute(
             "SELECT user_id FROM event_members WHERE event_id = %s", (e,))}
     return templates.TemplateResponse(request=request, name="admin.html", context=ctx)
@@ -182,6 +189,19 @@ def toggle_user(uid: str, user=Depends(admin_page),
         A.revoke_all_sessions(conn, uid)
     audit(conn, user["id"], "user.disable" if now else "user.enable", "user", uid, {})
     return back(f"{row['username']} {'disabled' if now else 're-enabled'}")
+
+
+# --- image leads -------------------------------------------------------------
+
+@router.post("/image-leads/{lead_id}/delete")
+def delete_image_lead(lead_id: str, user=Depends(admin_page), conn = Depends(get_db)):
+    try:
+        n = image_leads.delete_lead(conn, lead_id, user)
+    except A.ApiError as e:
+        # get_db commits on clean exit; without this the rows would go while the files stay.
+        conn.rollback()
+        return back(e.message, "err")
+    return back(f"Image lead deleted — {n} photo(s) removed")
 
 
 # --- updates -----------------------------------------------------------------

@@ -247,6 +247,39 @@
   </table></div>
 </div>
 
+<div class="card">
+  <h2>Image leads from the floor</h2>
+  <div class="sub">Photos of cards taken on the floor. "Captured" is the time on the phone.
+    Photo links re-check sign-in and open a short-lived copy.
+    <a class="btn ghost tiny" href="/api/v1/events/{{ event.id }}/image-leads/export.csv">Download CSV</a></div>
+  <div class="tscroll"><table class="tbl">
+    <thead><tr><th class="tight">Captured</th><th>Client</th><th>Note</th><th>By</th>
+      <th>Photos</th><th class="tight">Status</th><th class="tight">Actions</th></tr></thead>
+    <tbody>
+    {% for l in image_leads %}
+      <tr>
+        <td class="tight">{{ (l.captured_at or '')|replace('T',' ')|replace('Z','') }}</td>
+        <td><b>{{ l.client_name }}</b>
+          {% if not l.client_id %}<span class="badge mute">Other</span>{% endif %}</td>
+        <td style="font-size:12.5px">{{ l.note or '' }}</td>
+        <td>{{ l.by_name or '—' }}</td>
+        <td class="tight">{% for p in l.photos %}<a href="{{ p.content_url }}" target="_blank"
+            rel="noopener"><img src="{{ p.content_url }}" loading="lazy" alt="Photo {{ p.slot }}"
+            width="64" height="64" style="object-fit:cover;border-radius:6px;margin-right:4px"></a>{% endfor %}</td>
+        <td class="tight">{% if l.photos|length >= l.photo_count %}<span class="badge ok">complete</span>
+          {% else %}<span class="badge crit">uploading {{ l.photos|length }}/{{ l.photo_count }}</span>{% endif %}</td>
+        <td class="tight">
+          <form class="rowform" method="post" action="/admin/image-leads/{{ l.id }}/delete"
+                onsubmit="return confirm('Delete this image lead and its photos? This cannot be undone.')">
+            <button class="btn danger tiny" type="submit">Delete</button></form></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" style="color:var(--gray-700)">No image leads yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</div>
+
 {% endif %}
 </main>
 </body>

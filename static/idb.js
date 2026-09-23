@@ -3,11 +3,12 @@
 import { REPLICA_STORES } from './sync_core.js';
 
 export const DB_NAME = 'fielddesk';
-export const DB_VERSION = 1;
+export const DB_VERSION = 2;
 
 /* `leads` and `outbox` are client-authored and never appear in a sync payload.
  * They are also kept OUT of the apply transaction's scope — see applyTx below. */
-const ALL_STORES = [...REPLICA_STORES, 'meta', 'leads', 'outbox'];
+export const IMAGE_STORES = ['image_leads', 'image_photos', 'image_logs', 'image_config'];
+const ALL_STORES = [...REPLICA_STORES, 'meta', 'leads', 'outbox', ...IMAGE_STORES];
 
 let _db = null;
 
@@ -41,6 +42,18 @@ function openAt(version) {
       if (!db.objectStoreNames.contains('outbox')) {
         const s = db.createObjectStore('outbox', { keyPath: 'id' });
         s.createIndex('by_state', 'state');
+      }
+      if (!db.objectStoreNames.contains('image_leads')) {
+        db.createObjectStore('image_leads', { keyPath: 'id' }).createIndex('by_owner', 'owner_key');
+      }
+      if (!db.objectStoreNames.contains('image_photos')) {
+        db.createObjectStore('image_photos', { keyPath: 'id' }).createIndex('by_lead', 'lead_id');
+      }
+      if (!db.objectStoreNames.contains('image_logs')) {
+        db.createObjectStore('image_logs', { keyPath: 'id' }).createIndex('by_lead', 'lead_id');
+      }
+      if (!db.objectStoreNames.contains('image_config')) {
+        db.createObjectStore('image_config', { keyPath: 'key' });
       }
     };
     req.onsuccess = () => {
@@ -168,6 +181,21 @@ export async function applyRebase(plan, rebaseKey) {
   for (const op of plan.ops) outbox.put(op);
   tx.objectStore('meta').delete(rebaseKey);
   return done(tx);
+}
+
+/* Several image stores in ONE transaction. Same contract as applyTx: `fn` is
+ * synchronous; request results land via onsuccess before the promise resolves.
+ * Limited to the image stores so it can never widen into leads/outbox/replica. */
+export async function imageTx(names, mode, fn) {
+  for (const n of names) {
+    if (!IMAGE_STORES.includes(n)) throw new Error(`imageTx: '${n}' is not an image store`);
+  }
+  const db = await open();
+  const tx = db.transaction(names, mode);
+  const stores = Object.fromEntries(names.map((n) => [n, tx.objectStore(n)]));
+  const result = fn(stores, tx);
+  await done(tx);
+  return result;
 }
 
 export async function wipeEventData() {

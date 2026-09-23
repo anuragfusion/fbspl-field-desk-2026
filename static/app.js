@@ -7,6 +7,7 @@ import * as idb from './idb.js';
 import * as sync from './sync.js';
 import { formatReadiness } from './sync_core.js';
 import * as clientFilters from './client_filters.js';
+import * as imageLeads from './image_leads.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? '' : s)
@@ -73,6 +74,7 @@ async function signIn(username, password, remember) {
 }
 
 async function signOut() {
+  if (!(await imageLeads.beforeSignOut(S.session))) return;
   try { await fetch('/api/v1/auth/logout', { method: 'POST' }); } catch { /* offline is fine */ }
   await idb.del('meta', 'session');
   location.reload();
@@ -555,6 +557,7 @@ function bind() {
     try {
       S.session = await signIn($('gUser').value, $('gPass').value, $('gKeep').checked);
       showApp(S.session);
+      imageLeads.init({ getSession: () => S.session, getClients: () => S.clients, toast });
       await docsmod.requestPersistence();
       await sync.sync(S.session.event.id, { reason: 'first-run' });
       await afterSync();
@@ -620,6 +623,7 @@ async function boot() {
    * path at all — not even an optimistic one, because a captive portal makes it
    * hang for thirty seconds. */
   showApp(S.session);
+  imageLeads.init({ getSession: () => S.session, getClients: () => S.clients, toast });
   await reload();
   setStatus();
   sync.startAutoSync(S.session.event.id);
