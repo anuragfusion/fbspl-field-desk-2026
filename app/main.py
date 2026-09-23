@@ -1,5 +1,7 @@
 """FBSPL Field Desk — FastAPI app."""
 
+import hashlib
+import json
 import os
 
 from fastapi import Depends, FastAPI, Request, Response
@@ -179,12 +181,53 @@ def no_self_service_reset():
 
 # --- service worker must be served from root scope ---------------------------
 
+# sw.js is the worker itself, selftest.html is a dev page, index.html is served as /app.
+SHELL_EXCLUDE = {"sw.js", "selftest.html", "index.html"}
+SW_VERSION_SLOT = "'__SHELL_VERSION__'"
+SW_URLS_SLOT = "[/* __SHELL_URLS__ */]"
+
+
+def shell_files():
+    return sorted(
+        p for p in STATIC_DIR.rglob("*")
+        if p.is_file()
+        and p.name not in SHELL_EXCLUDE
+        and not any(part.startswith(".") for part in p.relative_to(STATIC_DIR).parts))
+
+
+def shell_urls():
+    return ["/app"] + [f"/static/{p.relative_to(STATIC_DIR).as_posix()}" for p in shell_files()]
+
+
+def shell_version():
+    """Fingerprint of every file a phone caches, so any change in static/ ships
+    a new worker and a fresh cache without anyone bumping a number."""
+    h = hashlib.sha256()
+    for p in [STATIC_DIR / "index.html", STATIC_DIR / "sw.js", *shell_files()]:
+        h.update(p.relative_to(STATIC_DIR).as_posix().encode())
+        h.update(b"\0")
+        h.update(p.read_bytes())
+        h.update(b"\0")
+    return h.hexdigest()[:16]
+
+
+def render_service_worker():
+    src = (STATIC_DIR / "sw.js").read_text()
+    # A worker with an empty file list installs fine and then breaks offline
+    # silently, so a missing placeholder must fail loudly instead.
+    for slot in (SW_VERSION_SLOT, SW_URLS_SLOT):
+        if src.count(slot) != 1:
+            raise RuntimeError(f"static/sw.js must contain {slot} exactly once")
+    return (src.replace(SW_VERSION_SLOT, json.dumps(shell_version()))
+               .replace(SW_URLS_SLOT, json.dumps(shell_urls())))
+
+
 @app.get("/sw.js", include_in_schema=False)
 def service_worker():
     """A service worker can only control paths at or below its own URL, so this
     cannot live under /static. no-cache or a shell update takes a day to land."""
-    return FileResponse(STATIC_DIR / "sw.js", media_type="application/javascript",
-                        headers={"Cache-Control": "no-cache"})
+    return Response(render_service_worker(), media_type="application/javascript",
+                    headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/", include_in_schema=False)
@@ -203,9 +246,8 @@ def app_shell():
 
 @app.get("/api/v1/version", include_in_schema=False)
 def version():
-    """The shell has no content hashes (no build step), so the app compares its
-    own SHELL_VERSION against this and nags when they drift."""
-    return {"shell_version": 7, "time": now_iso()}
+    """Same fingerprint the served sw.js carries."""
+    return {"shell_version": shell_version(), "time": now_iso()}
 
 
 @app.get("/healthz", include_in_schema=False)

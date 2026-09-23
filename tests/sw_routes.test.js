@@ -13,6 +13,15 @@ import { fileURLToPath } from 'node:url';
 
 const SW = fileURLToPath(new URL('../static/sw.js', import.meta.url));
 
+/* The server fills these in (app/main.py render_service_worker); stand in for it. */
+const TEST_URLS = ['/app', '/static/app.css', '/static/app.js', '/static/client_filters.js',
+  '/static/idb.js', '/static/sync.js', '/static/sync_core.js', '/static/docs.js'];
+function renderedSw() {
+  return fs.readFileSync(SW, 'utf8')
+    .replace("'__SHELL_VERSION__'", JSON.stringify('test'))
+    .replace('[/* __SHELL_URLS__ */]', JSON.stringify(TEST_URLS));
+}
+
 /* Run sw.js in a bare context and hand back its fetch handler. */
 function loadSw(spy = {}) {
   const handlers = {};
@@ -38,7 +47,7 @@ function loadSw(spy = {}) {
     put: (u, res) => { (spy.put ||= []).push(u); return Promise.resolve(); },
   });
   vm.createContext(ctx);
-  vm.runInContext(fs.readFileSync(SW, 'utf8'), ctx);
+  vm.runInContext(renderedSw(), ctx);
   return Object.assign(handlers.fetch, { handlers });
 }
 

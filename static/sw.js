@@ -1,27 +1,16 @@
 /* Service worker. Served from / (see app/main.py) — a worker can only control
  * paths at or below its own URL, so it cannot live under /static.
  *
- * Bump SHELL_VERSION by hand when any shell file changes. No build step means no
- * content hashes; the app compares this against /api/v1/version when online and
- * nags if they differ.
+ * The two placeholders below are filled in by app/main.py on every request:
+ * SHELL_VERSION with a fingerprint of the shell files, SHELL_URLS with every
+ * file in static/. Never hand-edit them; add a file to static/ and it ships.
  */
 
-const SHELL_VERSION = 7;
-const SHELL = `shell-v${SHELL_VERSION}`;
+const SHELL_VERSION = '__SHELL_VERSION__';
+const SHELL = `shell-${SHELL_VERSION}`;
 const DOCS = 'docs-v1';
 
-const SHELL_URLS = [
-  '/app',
-  '/static/app.css',
-  '/static/app.js',
-  '/static/client_filters.js',
-  '/static/idb.js',
-  '/static/sync.js',
-  '/static/sync_core.js',
-  '/static/docs.js',
-  '/static/manifest.webmanifest',
-  '/static/fbspl_logo.png',
-];
+const SHELL_URLS = [/* __SHELL_URLS__ */];
 
 /* cache.addAll() reads through the HTTP cache. /static is served without a
  * Cache-Control header, so Chrome caches it heuristically and a bumped shell

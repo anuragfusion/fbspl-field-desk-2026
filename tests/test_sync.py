@@ -291,21 +291,5 @@ class DocumentTests(Base):
         self.assertNotEqual(a["id"], b["id"])
 
 
-class ShellVersionTest(unittest.TestCase):
-    """No build step, no content hashes: the shell cache is keyed on a number a
-    human types twice. Get the two out of step and devices either nag forever or,
-    worse, keep serving a stale app.js from cache after a fix has shipped."""
-
-    def test_service_worker_and_server_agree(self):
-        import re
-        from pathlib import Path
-        sw = Path(__file__).resolve().parent.parent / "static" / "sw.js"
-        m = re.search(r"const SHELL_VERSION = (\d+);", sw.read_text())
-        self.assertIsNotNone(m, "SHELL_VERSION not found in sw.js")
-        served = TestClient(app).get("/api/v1/version").json()["shell_version"]
-        self.assertEqual(int(m.group(1)), served,
-                         "bump SHELL_VERSION in sw.js and shell_version in app/main.py together")
-
-
 if __name__ == "__main__":
     unittest.main()

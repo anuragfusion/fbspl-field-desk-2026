@@ -35,8 +35,10 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 The service worker only answers navigations to `/` and `/app` from cache. `/admin` is server-rendered
 and must reach the network — a broader rule serves the floor shell at `/admin` and the console simply
 is not there, with nothing in the console log to say why. `tests/sw_routes.test.js` holds that line.
-**Shipping a change to `static/`:** bump `SHELL_VERSION` in `sw.js` *and* `shell_version` in
-`app/main.py` together — a test fails if they drift. The app calls `registration.update()` on every
+**Shipping a change to `static/`:** nothing to bump. The server fills in `sw.js` on every request
+with a fingerprint of the shell files and the list of every file in `static/` (except `sw.js`,
+`selftest.html` and `index.html`, which is served as `/app`), so any edit or new file ships a new
+worker and a fresh offline cache; `tests/test_shell.py` holds that line. The app calls `registration.update()` on every
 boot and reloads itself once the new worker claims the page, so a device picks the change up on the
 next launch without anyone opening DevTools. Install fetches every shell file with `cache: 'reload'`;
 without that, `/static` (served with no `Cache-Control`) is cached heuristically by the browser and a
@@ -202,8 +204,9 @@ keeps read access until they reconnect. Devices must have an OS passcode; there 
 revocation and there cannot be one. Say this to the team rather than implying the sign-in protects
 the data.
 
-**Bump `SHELL_VERSION` in `static/sw.js`** whenever a shell file changes. No build step means no
-content hashes, so that constant is the only cache-buster.
+**Never hand-edit `SHELL_VERSION` or `SHELL_URLS` in `static/sw.js`.** They are placeholders the
+server fills in (`render_service_worker` in `app/main.py`); anything dropped into `static/` is
+downloaded by every phone on install, so keep large files out of it.
 
 ---
 

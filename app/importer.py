@@ -13,6 +13,7 @@ from datetime import date, datetime
 from typing import Any, Iterable
 
 from openpyxl import load_workbook
+from psycopg2.extras import execute_values
 
 from .db import bump_version, new_id, now_iso
 
@@ -516,43 +517,61 @@ def plan_import(conn, event_id: str, clients: list[dict]) -> dict:
 
 def apply_import(conn, event_id: str, clients: list[dict]) -> dict:
     """Commit. Idempotent on source_row_hash — re-importing the identical
-    workbook produces zero updates (§12.4)."""
+    workbook produces zero updates (§12.4).
+
+    Batched via execute_values: on a remote Postgres (Supabase), a round trip
+    per row — the original shape of this function — took as long as
+    (row count) x (network latency), long enough to hit gunicorn's worker
+    timeout on a large workbook. This does the whole commit in three round
+    trips total regardless of row count: one upsert for every changed client,
+    one bulk delete of their old POCs, one bulk insert of the new ones."""
     version = bump_version(conn, event_id)
     existing = {r["name"].lower(): r for r in conn.execute(
         "SELECT id, name, source_row_hash FROM clients WHERE event_id = %s", (event_id,))}
     counts = {"new": 0, "updated": 0, "unchanged": 0}
 
+    changed: list[tuple[dict, str]] = []   # (client, cid)
     for c in clients:
         prev = existing.get(c["name"].lower())
         if prev and prev["source_row_hash"] == c["source_row_hash"]:
             counts["unchanged"] += 1
             continue
-
         cid = prev["id"] if prev else new_id()
-        fields = (c["name"], c["priority"], c["owner"], c["account_manager"], c["location"],
-                  c["product"], json.dumps(c["tags"]), c["summary"],
-                  json.dumps(c["talking_points"]), json.dumps(c["avoid_points"]),
-                  json.dumps(c["signals"], default=str), c["source_row_hash"], version, now_iso())
-        if prev:
-            conn.execute(
-                "UPDATE clients SET name=%s, priority=%s, owner=%s, account_manager=%s, location=%s,"
-                " product=%s, tags=%s, summary=%s, talking_points=%s, avoid_points=%s, signals=%s,"
-                " source_row_hash=%s, version=%s, updated_at=%s WHERE id=%s", (*fields, cid))
-            conn.execute("DELETE FROM client_pocs WHERE client_id = %s", (cid,))
-            counts["updated"] += 1
-        else:
-            conn.execute(
-                "INSERT INTO clients (name, priority, owner, account_manager, location, product,"
-                " tags, summary, talking_points, avoid_points, signals, source_row_hash, version,"
-                " updated_at, id, event_id, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                (*fields, cid, event_id, now_iso()))
-            counts["new"] += 1
+        counts["updated" if prev else "new"] += 1
+        changed.append((c, cid))
 
-        for i, p in enumerate(c["pocs"]):
-            conn.execute(
+    if changed:
+        ts = now_iso()
+        cur = conn.cursor()
+        execute_values(
+            cur,
+            "INSERT INTO clients (id, event_id, name, priority, owner, account_manager,"
+            " location, product, tags, summary, talking_points, avoid_points, signals,"
+            " source_row_hash, version, created_at, updated_at) VALUES %s"
+            " ON CONFLICT (id) DO UPDATE SET"
+            " name=EXCLUDED.name, priority=EXCLUDED.priority, owner=EXCLUDED.owner,"
+            " account_manager=EXCLUDED.account_manager, location=EXCLUDED.location,"
+            " product=EXCLUDED.product, tags=EXCLUDED.tags, summary=EXCLUDED.summary,"
+            " talking_points=EXCLUDED.talking_points, avoid_points=EXCLUDED.avoid_points,"
+            " signals=EXCLUDED.signals, source_row_hash=EXCLUDED.source_row_hash,"
+            " version=EXCLUDED.version, updated_at=EXCLUDED.updated_at",
+            [(cid, event_id, c["name"], c["priority"], c["owner"], c["account_manager"],
+              c["location"], c["product"], json.dumps(c["tags"]), c["summary"],
+              json.dumps(c["talking_points"]), json.dumps(c["avoid_points"]),
+              json.dumps(c["signals"], default=str), c["source_row_hash"], version, ts, ts)
+             for c, cid in changed])
+
+        cur.execute("DELETE FROM client_pocs WHERE client_id = ANY(%s)",
+                    ([cid for _, cid in changed],))
+
+        poc_rows = [(new_id(), cid, event_id, p["name"], p["title"], p["note"], i, version)
+                    for c, cid in changed for i, p in enumerate(c["pocs"])]
+        if poc_rows:
+            execute_values(
+                cur,
                 "INSERT INTO client_pocs (id, client_id, event_id, name, title, note,"
-                " sort_order, version) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-                (new_id(), cid, event_id, p["name"], p["title"], p["note"], i, version))
+                " sort_order, version) VALUES %s",
+                poc_rows)
 
     counts["version"] = version
     counts["total"] = len(clients)

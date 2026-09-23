@@ -1,0 +1,38 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      # 5433 on the host — matches the DATABASE_URL every test file falls back
+      # to, so `pytest` on the host can point at this same container.
+      - "5433:5432"
+    volumes:
+      - fielddesk-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/postgres
+      # Document/image upload is not configured here (needs a real Supabase
+      # project) — the app boots and everything else works, uploads 500 until
+      # SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY are added below.
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: admin123
+      EVENT_NAME: Local Test Event
+      EVENT_TIMEZONE: UTC
+    ports:
+      - "8000:8000"
+
+volumes:
+  fielddesk-db:

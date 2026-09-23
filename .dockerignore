@@ -1,0 +1,9 @@
+.env
+.git/
+.venv/
+venv/
+__pycache__/
+*.pyc
+fielddesk.db*
+storage/
+node_modules/
