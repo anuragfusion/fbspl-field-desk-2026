@@ -31,6 +31,11 @@ services:
       ADMIN_PASSWORD: admin123
       EVENT_NAME: Local Test Event
       EVENT_TIMEZONE: UTC
+      IMAGE_MAX_DIMENSION: "1600"
+      IMAGE_JPEG_QUALITY: "0.8"
+      IMAGE_MAX_UPLOAD_BYTES: "5242880"
+      IMAGE_LOG_LEVEL: info
+      IMAGE_CONSOLE_LOG: "on"
     ports:
       - "8000:8000"
 

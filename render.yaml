@@ -23,6 +23,23 @@ services:
         sync: false
       - key: SUPABASE_STORAGE_BUCKET
         value: documents
+      # Image leads — own private bucket (auto-created) and phone compression
+      # settings. Change these without a code change; restart to apply.
+      - key: SUPABASE_IMAGES_BUCKET
+        value: images
+      - key: IMAGE_MAX_DIMENSION
+        value: "1600"
+      - key: IMAGE_JPEG_QUALITY
+        value: "0.8"
+      - key: IMAGE_MAX_UPLOAD_BYTES
+        value: "5242880"
+      - key: IMAGE_LOG_LEVEL
+        value: info
+      - key: IMAGE_CONSOLE_LOG
+        value: "on"
+      # https://<your-app>.onrender.com — so CSV photo links use https.
+      - key: PUBLIC_BASE_URL
+        sync: false
       # Free-tier Render has no shell access and an ephemeral filesystem, so there's
       # no way to run `python -m app.cli create-admin` after deploy. Set these once in
       # the dashboard to auto-create the first admin/event on startup (see

@@ -208,6 +208,18 @@ the data.
 server fills in (`render_service_worker` in `app/main.py`); anything dropped into `static/` is
 downloaded by every phone on install, so keep large files out of it.
 
+**Image leads are walled off from everything else.** Own tables (`image_leads`,
+`image_lead_photos`), own private bucket (`SUPABASE_IMAGES_BUCKET`, default `images`), own module
+(`app/image_leads.py`, `app/image_storage.py`), never in the sync payload. A floor user sees and
+touches only their own; admin sees all and is the only one who can delete or export. Every id is
+phone-generated so every request is safely retryable, and a filled photo slot is immutable. The
+server trusts nothing the phone says: type is sniffed from the bytes, the fingerprint (SHA-256 of
+the exact bytes received) is recomputed, the uploader comes from the session. Width/height are
+phone-reported and display-only. Delete removes rows, then files, and commits only if the files
+are gone — a storage failure rolls the rows back. Compression settings are env vars served by
+`GET /api/v1/image-leads/config`; logs are `[image-lead] SERVER` (checked by the server, trust
+these) or `[image-lead] DEVICE` (reported by the phone) and carry only ids, sizes and timings.
+
 ---
 
 ## Not built yet
@@ -216,5 +228,10 @@ downloaded by every phone on install, so keep large files out of it.
 session-listing screen (revoke endpoint exists, curl it) · client and meeting edit forms (re-import
 instead) · multi-event switching in the UI (the API and schema support it) · `password_resets`
 (table exists, empty by design — an admin sets passwords).
+
+**Image leads backlog:** verify photo width/height on the server with Pillow (today they are
+phone-reported, display-only) · clean up photo files left in the `images` bucket when a whole event
+is deleted (the database cascades, the bucket does not) · read business cards automatically with
+the Gemini API.
 
 Add them after the conference, when a bug costs a bad afternoon instead of a client meeting.

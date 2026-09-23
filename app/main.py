@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import admin, api, storage
+from . import admin, api, image_leads, image_storage, storage
 from . import auth as A
 from .db import BASE_DIR, audit, db, new_id, get_db, init_db, now_iso
 
@@ -73,6 +73,13 @@ def _startup() -> None:
         # Document upload/download will 500 until these are set, but the rest of
         # the app (sync, leads, admin) doesn't depend on them — don't block boot.
         pass
+    try:
+        image_storage.ensure_bucket()
+    except image_storage.StorageNotConfigured:
+        pass
+    except Exception as e:
+        # A new feature's bucket must never stop the existing app from booting.
+        image_leads.log.warning("[image-lead] SERVER images bucket not verified: %s", e)
 
 
 @app.exception_handler(A.ApiError)
@@ -256,6 +263,7 @@ def healthz():
 
 
 app.include_router(api.router)
+app.include_router(image_leads.router)
 app.include_router(admin.router)
 
 STATIC_DIR.mkdir(parents=True, exist_ok=True)

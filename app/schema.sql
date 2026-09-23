@@ -245,3 +245,40 @@ CREATE TABLE IF NOT EXISTS op_log (
   kind       TEXT NOT NULL,
   applied_at TEXT NOT NULL
 );
+
+-- Image leads ----------------------------------------------------------------
+-- Deliberately separate from leads and documents: own tables, own storage
+-- bucket, own endpoints (app/image_leads.py). Never part of the sync payload.
+CREATE TABLE IF NOT EXISTS image_leads (
+  id            TEXT PRIMARY KEY,                -- PHONE-generated; offline + idempotent
+  event_id      TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  client_id     TEXT REFERENCES clients(id) ON DELETE SET NULL,  -- NULL = typed "Other" name
+  client_name   TEXT NOT NULL,                   -- snapshot at capture, or the "Other" name
+  note          TEXT,
+  photo_count   SMALLINT NOT NULL CHECK (photo_count IN (1, 2)),
+  captured_by   TEXT NOT NULL REFERENCES users(id),
+  captured_at   TEXT NOT NULL,                   -- DEVICE time at capture. Never overwritten.
+  synced_at     TEXT NOT NULL,
+  clock_skew_ms INTEGER,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_image_leads_event ON image_leads (event_id, captured_at);
+CREATE INDEX IF NOT EXISTS ix_image_leads_by    ON image_leads (captured_by);
+
+-- One immutable file per (lead, slot). "slot <= photo_count" is enforced in
+-- app/image_leads.py; a CHECK cannot reference the parent row.
+CREATE TABLE IF NOT EXISTS image_lead_photos (
+  id              TEXT PRIMARY KEY,              -- PHONE-generated
+  image_lead_id   TEXT NOT NULL REFERENCES image_leads(id) ON DELETE CASCADE,
+  slot            SMALLINT NOT NULL CHECK (slot IN (1, 2)),
+  storage_key     TEXT NOT NULL,                 -- path inside the images bucket
+  mime_type       TEXT NOT NULL,                 -- sniffed server-side, never trusted
+  size_bytes      INTEGER NOT NULL,
+  checksum_sha256 TEXT NOT NULL,                 -- of the exact bytes received
+  width           INTEGER,                       -- phone-reported, display only, NOT verified
+  height          INTEGER,                       -- phone-reported, display only, NOT verified
+  compressed      BOOLEAN NOT NULL,              -- false = original uploaded as a fallback
+  uploaded_at     TEXT NOT NULL,
+  UNIQUE (image_lead_id, slot)
+);
