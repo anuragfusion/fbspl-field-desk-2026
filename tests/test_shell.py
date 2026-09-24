@@ -39,6 +39,15 @@ class ServedWorkerTest(unittest.TestCase):
         self.assertEqual(res.headers["cache-control"], "no-cache")
         self.assertIn("javascript", res.headers["content-type"])
 
+    def test_static_files_revalidate_but_are_not_no_store(self):
+        res = self.client.get("/static/app.js")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.headers["cache-control"], "no-cache")
+        etag = res.headers["etag"]
+        again = self.client.get("/static/app.js", headers={"If-None-Match": etag})
+        self.assertEqual(again.status_code, 304)
+        self.assertEqual(again.headers["cache-control"], "no-cache")
+
     def test_version_endpoint_matches_worker(self):
         _, version, _ = served_sw(self.client)
         self.assertEqual(self.client.get("/api/v1/version").json()["shell_version"], version)

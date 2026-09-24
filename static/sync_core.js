@@ -175,12 +175,48 @@ export function readiness(docs, cachedUrls) {
   };
 }
 
-export function formatReadiness(r) {
+/* `busy` is whether a download is actually running. Without it a missing file
+ * reads "Downloading…" forever, and nobody taps the button that would fetch it. */
+export function formatReadiness(r, { busy = false } = {}) {
   const mb = (n) => `${Math.round(n / 1e6)} MB`;   // 1e6: a consumer-facing number
   if (r.total === 0) return 'No documents for this event';
-  return r.ready
-    ? `Ready for offline — ${r.total} of ${r.total} documents, ${mb(r.totalBytes)}`
-    : `Downloading — ${r.haveCount} of ${r.total} documents, ${mb(r.haveBytes)} of ${mb(r.totalBytes)}`;
+  if (r.ready) return `Ready for offline — ${r.total} of ${r.total} documents, ${mb(r.totalBytes)}`;
+  if (busy) {
+    return `Downloading — ${r.haveCount} of ${r.total} documents, ${mb(r.haveBytes)} of ${mb(r.totalBytes)}`;
+  }
+  const n = r.total - r.haveCount;
+  return `${n} document${n === 1 ? '' : 's'} not downloaded — tap Sync & prepare offline`;
+}
+
+/* The automatic after-sync download skips files above this; the button fetches
+ * everything. A size cap, not a wifi check: iOS Safari cannot tell us which it is
+ * on. 1e6 to match the MB the badge shows. */
+export const AUTO_PREFETCH_MAX_BYTES = 20e6;
+
+/* One run at a time. The 60 s poll must not start a second download on top of
+ * the first — but a call made mid-run may know about a document the running one
+ * does not, so it queues ONE follow-up run instead of just joining. Any number
+ * of calls during a run share that single follow-up; `merge` folds their
+ * arguments together (default: the latest call's). */
+export function singleFlight(fn, { merge = (_prev, next) => next } = {}) {
+  let inflight = null;
+  let queued = null;
+  let queuedArgs = null;
+  const start = (args) => {
+    inflight = Promise.resolve().then(() => fn(...args)).finally(() => { inflight = null; });
+    return inflight;
+  };
+  const run = (...args) => {
+    if (!inflight) return start(args);
+    queuedArgs = queued ? merge(queuedArgs, args) : args;
+    if (!queued) {
+      const next = () => { queued = null; return start(queuedArgs); };
+      queued = inflight.then(next, next);
+    }
+    return queued;
+  };
+  run.busy = () => inflight !== null;
+  return run;
 }
 
 /* Warn BEFORE starting a download that will not fit, not halfway through it. */

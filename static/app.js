@@ -113,6 +113,25 @@ const clientById = (id) => S.clients.find((c) => c.id === id);
 const pocsFor = (id) => S.pocs.filter((p) => p.client_id === id)
   .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
 
+/* The POC comment leads the note ("Strong Advocate · Outside work: …"), so the
+   tone is read from the text before the hobbies part. */
+function pocTone(note) {
+  const t = String(note || '').split(/Outside work:/i)[0];
+  if (/\bvocal\b|\bdirect\b/i.test(t)) return 'critx';
+  if (/\badvocate/i.test(t)) return 'good';
+  if (/\bneutral\b/i.test(t)) return 'warnx';
+  return '';
+}
+
+/* Wraps the comment words in .tone so they take the box's dark variant. */
+function pocNoteHtml(note) {
+  const n = String(note || '');
+  if (!pocTone(n)) return esc(n);
+  const i = n.search(/\s*·?\s*Outside work:/i);
+  const lead = i < 0 ? n : n.slice(0, i);
+  return `<span class="tone">${esc(lead)}</span>${esc(n.slice(lead.length))}`;
+}
+
 /* --- rendering ----------------------------------------------------------- */
 function sigStrip(c) {
   const g = c.signals || {};
@@ -202,9 +221,9 @@ function clientCard(c) {
           <ul>${list(c.avoid_points)}</ul></div>` : ''}
         ${scopeBlock(c)}
         ${pocs.length ? `<div class="blk"><div class="bt">Who you will meet</div>
-          ${pocs.map((p) => `<div class="poc"><div class="pn">${esc(p.name)}${
+          ${pocs.map((p) => `<div class="poc ${pocTone(p.note)}"><div class="pn">${esc(p.name)}${
             p.title ? ` <span class="pt">— ${esc(p.title)}</span>` : ''}</div>${
-            p.note ? `<div style="font-size:12.5px;color:var(--gray-700);margin-top:3px">${esc(p.note)}</div>` : ''
+            p.note ? `<div style="font-size:12.5px;color:var(--gray-700);margin-top:3px">${pocNoteHtml(p.note)}</div>` : ''
           }</div>`).join('')}</div>` : ''}
         ${cuesBlock(c)}
         ${mtgs.length ? `<div class="blk"><div class="bt">Scheduled</div>${mtgs.map((m) =>
@@ -250,7 +269,17 @@ function populateClientFilterOptions() {
   }
 }
 
-function renderClients() {
+/* Every client is already on the device (sync brings them all); only the
+ * drawing is paged, because 300 rich cards at once is slow on a phone. Search
+ * and filters still run over the full list. */
+const CLIENT_PAGE = 30;
+let clientShown = CLIENT_PAGE;
+let clientList = [];
+
+/* `reset` when the search or a filter changes; a sync re-render keeps how far
+ * the user has scrolled. */
+function renderClients({ reset = false } = {}) {
+  if (reset) clientShown = CLIENT_PAGE;
   const q = ($('qClients').value || '').trim().toLowerCase();
   const pri = [...document.querySelectorAll('#cPriority .chip[aria-pressed="true"]')]
     .map((b) => b.dataset.v);
@@ -263,13 +292,46 @@ function renderClients() {
   )).sort((a, b) => (rank[a.priority] ?? 3) - (rank[b.priority] ?? 3)
     || String(a.name).localeCompare(String(b.name)));
 
+  clientList = list;
   $('clientCards').innerHTML = list.length
-    ? list.map(clientCard).join('')
+    ? list.slice(0, clientShown).map(clientCard).join('')
     : `<div class="empty" style="grid-column:1/-1"><b>${
       S.clients.length ? 'No client matches those filters' : 'No client briefs yet'}</b>${
       S.clients.length ? 'Clear the search or filter dropdowns.'
         : 'Ask the office to publish the briefing pack, then pull to refresh.'}</div>`;
   applyCardCollapse();
+  renderClientMore();
+}
+
+function renderClientMore() {
+  const shown = Math.min(clientShown, clientList.length);
+  const left = clientList.length - shown;
+  $('clientMore').innerHTML = left > 0 ? `<span>Showing ${shown} of ${clientList.length}</span>
+    <button class="btn sub tiny" type="button" data-more="all">Show all</button>` : '';
+  rearmClientMore();
+}
+
+/* An IntersectionObserver only reports CHANGES. If the bar is still on screen
+ * after a set is added (Collapse all, a tall PC screen) no new callback comes and
+ * the list would stall at 60 — so re-observe, which reports the current state. */
+let clientMoreObserver = null;
+function rearmClientMore() {
+  if (!clientMoreObserver) return;
+  clientMoreObserver.unobserve($('clientMore'));
+  clientMoreObserver.observe($('clientMore'));
+}
+
+/* Appends rather than re-drawing, so cards the user already opened or closed
+ * stay as they are. */
+function showMoreClients(all = false) {
+  const from = Math.min(clientShown, clientList.length);
+  clientShown = all ? clientList.length : clientShown + CLIENT_PAGE;
+  const add = clientList.slice(from, clientShown);
+  if (!add.length) return;
+  $('clientCards').insertAdjacentHTML('beforeend', add.map(clientCard).join(''));
+  [...document.querySelectorAll('#clientCards .ccard')].slice(from)
+    .forEach((card) => setCardCollapsed(card, cardsCollapsed));
+  renderClientMore();
 }
 
 /* Card collapse: a global "Collapse all"/"Expand all" toggle, plus each card's
@@ -461,7 +523,7 @@ async function openDoc(docId) {
     setTimeout(() => URL.revokeObjectURL(url), 60000);
   } catch (err) {
     if (err.code === 'NOT_DOWNLOADED') {
-      toast('Not downloaded — tap "Prepare for offline" while you have signal', 'err');
+      toast('Not downloaded — tap "Sync & prepare offline" while you have signal', 'err');
     } else {
       toast(`Could not open: ${err.message}`, 'err');
     }
@@ -505,17 +567,31 @@ function bind() {
     };
   });
 
-  $('qClients').oninput = renderClients;
+  const refilter = () => renderClients({ reset: true });
+  $('qClients').oninput = refilter;
   ['fAM', 'fAMS', 'fStatus', 'fHealth'].forEach((id) => {
     const el = $(id);
-    if (el) el.onchange = renderClients;
+    if (el) el.onchange = refilter;
   });
   document.querySelectorAll('#cPriority .chip').forEach((b) => {
     b.onclick = () => {
       b.setAttribute('aria-pressed', b.getAttribute('aria-pressed') !== 'true');
-      renderClients();
+      refilter();
     };
   });
+
+  $('clientMore').addEventListener('click', (e) => {
+    if (e.target.closest('[data-more="all"]')) showMoreClients(true);
+  });
+  /* Next set when the bar scrolls into view. A hidden tab never intersects, so
+   * this only fires on the Clients tab. "Show all" stays because browser find
+   * only sees cards that are drawn, and it is the way on if this is missing. */
+  if ('IntersectionObserver' in window) {
+    clientMoreObserver = new IntersectionObserver((entries) => {
+      if (entries.some((en) => en.isIntersecting)) showMoreClients();
+    }, { rootMargin: '400px 0px' });
+    clientMoreObserver.observe($('clientMore'));
+  }
 
   $('collapseAllBtn').onclick = () => {
     cardsCollapsed = !cardsCollapsed;
@@ -605,6 +681,7 @@ function bind() {
     if (navigator.onLine) toast(`Sync problem: ${e.detail.message}`, 'err');
   });
   docsmod.bus.addEventListener('storage-warning', (e) => toast(e.detail.message, 'err'));
+  docsmod.bus.addEventListener('progress', () => { renderDocs(); });
 }
 
 async function afterSync() {
@@ -612,6 +689,12 @@ async function afterSync() {
   await reload();
   await renderDocs();
   setStatus();
+  // Fetch what reconcile just made missing (a replaced document). Not awaited:
+  // big PDFs must not hold up the next sync. Only missing files, and only up to
+  // AUTO_PREFETCH_MAX_BYTES — larger ones wait for the button.
+  if (navigator.onLine) {
+    docsmod.prefetchAll({ auto: true }).then(renderDocs, (e) => console.warn('prefetch:', e));
+  }
 }
 
 async function boot() {

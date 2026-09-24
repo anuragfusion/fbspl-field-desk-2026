@@ -202,6 +202,13 @@ textarea.inp{min-height:76px;resize:vertical;line-height:1.5}
 .poc{background:var(--lav-30);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 11px;font-size:13px}
 .poc .pn{font-weight:700}
 .poc .pt{color:var(--gray-700);font-size:12px}
+.poc.good{background:#E8F6EF;border-color:#BFE5D3}
+.poc.warnx{background:#FFF3E3;border-color:#FBD9AC}
+.poc.critx{background:#FDECEA;border-color:#F5C6C2}
+.poc .tone{font-weight:600}
+.poc.good .tone{color:#0B6B41}
+.poc.warnx .tone{color:#8A4B00}
+.poc.critx .tone{color:#912018}
 .attach{display:flex;gap:6px;flex-wrap:wrap}
 .attach a{
   display:inline-flex;align-items:center;gap:6px;background:var(--lav-50);border:1px solid var(--line-2);
@@ -1241,9 +1248,9 @@ function clientCard(c){
       ((c.avoid||[]).length?'<div class="blk avoid"><div class="bt">Do not raise</div><ul>'+
         c.avoid.map(function(s){return '<li>'+esc(s)+'</li>';}).join("")+'</ul></div>':'')+
       ((c.pocs||[]).length?'<div class="blk"><div class="bt">Who you will meet</div>'+
-        c.pocs.map(function(p){ return '<div class="poc" style="margin-bottom:6px">'+
+        c.pocs.map(function(p){ return '<div class="poc '+pocTone(p.note)+'" style="margin-bottom:6px">'+
           '<div class="pn">'+esc(p.name)+(p.title?' <span class="pt">— '+esc(p.title)+'</span>':'')+'</div>'+
-          (p.note?'<div style="font-size:12.5px;color:var(--gray-700);margin-top:3px">'+esc(p.note)+'</div>':'')+
+          (p.note?'<div style="font-size:12.5px;color:var(--gray-700);margin-top:3px">'+pocNoteHtml(p.note)+'</div>':'')+
         '</div>'; }).join("")+'</div>':'')+
       (mtgs.length?'<div class="blk"><div class="bt">Scheduled</div>'+mtgs.map(function(m){
         return '<div style="font-size:13px">'+esc(dayLabel(m.date))+' · '+esc(m.time||"TBD")+
@@ -1771,6 +1778,25 @@ function money(v){
 function cell(rw,idx){ if(idx==null||idx<0) return ""; var v=rw[idx];
   if(v==null) return ""; if(v instanceof Date) return v; return String(v).trim(); }
 function isUnknown(v){ return !v || /^(n\/?a|na|none|nil|-|--|tbd|unknown)$/i.test(String(v).trim()); }
+
+/* The POC comment leads the note ("Strong Advocate · Outside work: …"), so the
+   tone is read from the text before the hobbies part. */
+function pocTone(note){
+  var t=String(note||"").split(/Outside work:/i)[0];
+  if(/\bvocal\b|\bdirect\b/i.test(t)) return "critx";
+  if(/\badvocate/i.test(t)) return "good";
+  if(/\bneutral\b/i.test(t)) return "warnx";
+  return "";
+}
+
+/* Wraps the comment words in .tone so they take the box's dark variant. */
+function pocNoteHtml(note){
+  var n=String(note||"");
+  if(!pocTone(n)) return esc(n);
+  var i=n.search(/\s*·?\s*Outside work:/i);
+  var lead=i<0?n:n.slice(0,i);
+  return '<span class="tone">'+esc(lead)+'</span>'+esc(n.slice(lead.length));
+}
 
 /* Scores a sheet the way the battlecards tool does, so the right tab wins. */
 function scoreHeaders(hdrs){

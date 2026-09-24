@@ -266,5 +266,17 @@ app.include_router(api.router)
 app.include_router(image_leads.router)
 app.include_router(admin.router)
 
+class RevalidatedStaticFiles(StaticFiles):
+    """no-cache (keep a copy, but check the ETag before using it), not no-store.
+    The service worker fetches the shell with cache:'reload' anyway; this covers
+    a browser with no worker running, which would otherwise keep a stale app.js
+    from its heuristic HTTP cache for days after a deploy."""
+
+    def file_response(self, *args, **kwargs):
+        res = super().file_response(*args, **kwargs)
+        res.headers["Cache-Control"] = "no-cache"
+        return res
+
+
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.mount("/static", RevalidatedStaticFiles(directory=STATIC_DIR), name="static")

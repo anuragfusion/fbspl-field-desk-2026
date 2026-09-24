@@ -5,7 +5,9 @@
  */
 
 import * as idb from './idb.js';
-import { docUrl, formatReadiness, readiness, storageWarning } from './sync_core.js';
+import {
+  AUTO_PREFETCH_MAX_BYTES, docUrl, formatReadiness, readiness, singleFlight, storageWarning,
+} from './sync_core.js';
 
 export const DOCS_CACHE = 'docs-v1';
 export const bus = new EventTarget();
@@ -21,7 +23,7 @@ async function cachedUrls() {
 export async function status() {
   const docs = await idb.getAll('documents');
   const r = readiness(docs, await cachedUrls());
-  return { ...r, label: formatReadiness(r) };
+  return { ...r, label: formatReadiness(r, { busy: prefetchAll.busy() }) };
 }
 
 /* THE guard. Paywalled convention wifi answers every request with 200 + an HTML
@@ -50,17 +52,27 @@ async function prefetchOne(doc) {
   }));
 }
 
-export async function prefetchAll({ force = false } = {}) {
+/* Runs after every sync (not only from the button), because reconcile() drops a
+ * replaced document's old bytes on the automatic 60 s sync: without this the
+ * device holds neither version until someone happens to tap the button.
+ * `auto` applies the size cap; a bigger file waits for the button, and the
+ * badge says it is not downloaded. */
+let lastWarning = null;
+export const prefetchAll = singleFlight(async ({ force = false, auto = false } = {}) => {
   const docs = await idb.getAll('documents');
   const have = await cachedUrls();
-  const todo = force ? docs : docs.filter((d) => !have.has(docUrl(d.id)));
+  const todo = (force ? docs : docs.filter((d) => !have.has(docUrl(d.id))))
+    .filter((d) => !auto || (Number(d.size_bytes) || 0) <= AUTO_PREFETCH_MAX_BYTES);
 
   if (todo.length) {
     const need = todo.reduce((s, d) => s + (Number(d.size_bytes) || 0), 0);
     const estimate = navigator.storage && navigator.storage.estimate
       ? await navigator.storage.estimate() : null;
     const warning = storageWarning(estimate, need);
-    if (warning) emit('storage-warning', { message: warning });
+    // Once per distinct message: this now runs every minute, and a toast every
+    // minute is noise people learn to ignore.
+    if (warning && warning !== lastWarning) emit('storage-warning', { message: warning });
+    lastWarning = warning;
   }
 
   const failed = [];
@@ -75,7 +87,11 @@ export async function prefetchAll({ force = false } = {}) {
   const final = await status();
   emit('done', { ...final, failed });
   return { ...final, failed };
-}
+}, {
+  // The button asked mid-run must not be downgraded to a capped follow-up by
+  // a poll that lands after it: any uncapped caller makes the follow-up uncapped.
+  merge: ([a = {}], [b = {}]) => [{ force: a.force || b.force, auto: a.auto && b.auto }],
+});
 
 /* Open path is cache-only. Never `await fetch` here: offline that hangs until
  * the OS timeout, which is exactly the "loading state that never resolves"

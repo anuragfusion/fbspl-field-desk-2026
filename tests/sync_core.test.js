@@ -8,7 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  REPLICA_STORES, applyDelta, readiness, formatReadiness,
+  REPLICA_STORES, applyDelta, readiness, formatReadiness, singleFlight, AUTO_PREFETCH_MAX_BYTES,
   validateSync, validateOutboxReply, storageWarning, docUrl,
   eventChanged, rebaseLeads,
 } from '../static/sync_core.js';
@@ -151,6 +151,69 @@ test('readiness counts only documents actually in the cache', () => {
   const all = readiness(docs, new Set(docs.map((d) => docUrl(d.id))));
   assert.equal(all.ready, true);
   assert.equal(formatReadiness(all), 'Ready for offline — 3 of 3 documents, 62 MB');
+});
+
+test('a missing document says "not downloaded", not "Downloading", when nothing runs', () => {
+  const docs = [{ id: 'a', size_bytes: 20e6 }, { id: 'b', size_bytes: 30e6 }];
+  const r = readiness(docs, new Set([docUrl('a')]));
+  assert.equal(formatReadiness(r), '1 document not downloaded — tap Sync & prepare offline');
+  assert.equal(formatReadiness(readiness(docs, new Set())),
+    '2 documents not downloaded — tap Sync & prepare offline');
+  assert.match(formatReadiness(r, { busy: true }), /^Downloading — 1 of 2 documents/);
+});
+
+test('singleFlight: overlapping calls never run fn concurrently, and queue one follow-up', async () => {
+  let running = 0; let maxRunning = 0; let runs = 0;
+  const release = [];
+  const job = singleFlight(async () => {
+    running += 1; runs += 1; maxRunning = Math.max(maxRunning, running);
+    await new Promise((r) => release.push(r));
+    running -= 1;
+    return runs;
+  });
+  const first = job();
+  assert.equal(job.busy(), true);
+  const second = job();        // mid-run: must not start now
+  const third = job();         // shares the same follow-up as second
+  assert.equal(second, third);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(runs, 1);
+  release.shift()();
+  assert.equal(await first, 1);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(runs, 2);       // the follow-up started only after the first ended
+  release.shift()();
+  assert.equal(await second, 2);
+  assert.equal(maxRunning, 1);
+  assert.equal(job.busy(), false);
+});
+
+test('singleFlight: calls queued mid-run are merged into one follow-up', async () => {
+  const seen = [];
+  const release = [];
+  const job = singleFlight(async (o) => { seen.push(o); await new Promise((r) => release.push(r)); },
+    { merge: ([a], [b]) => [{ auto: a.auto && b.auto }] });
+  const first = job({ auto: true });
+  const button = job({ auto: false });
+  job({ auto: true });          // a poll after the button must not re-cap it
+  await new Promise((r) => setTimeout(r, 0));
+  release.shift()();
+  await first;
+  await new Promise((r) => setTimeout(r, 0));
+  release.shift()();
+  await button;
+  assert.deepEqual(seen, [{ auto: true }, { auto: false }]);
+});
+
+test('auto-download cap is 20 MB', () => {
+  assert.equal(AUTO_PREFETCH_MAX_BYTES, 20e6);
+});
+
+test('singleFlight: a failed run does not jam later ones', async () => {
+  let n = 0;
+  const job = singleFlight(async () => { n += 1; if (n === 1) throw new Error('wifi'); return n; });
+  await assert.rejects(job(), /wifi/);
+  assert.equal(await job(), 2);
 });
 
 test('an evicted cache reports not-ready rather than a stale count', () => {
